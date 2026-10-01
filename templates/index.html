@@ -1,1 +1,54 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>FRCC-Spartans 2026 T20 Stats</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>FRCC-Spartans</h1>
+    <p>2026 Twenty20 · CricClubs · Ground-wise player statistics</p>
+  </header>
+  <section class="card">
+    <button id="run">Fetch 2026 Stats</button>
+    <div class="progress"><div id="bar"></div></div>
+    <div id="status">Ready.</div>
+    <a id="download" class="download hidden" href="#">Download Excel</a>
+  </section>
 
+  <div id="content" class="hidden">
+    <div class="tabs">
+      <button data-tab="summary">Ground Summary</button>
+      <button data-tab="bat">Ground Batting</button>
+      <button data-tab="bowl">Ground Bowling</button>
+      <button data-tab="obat">Overall Batting</button>
+      <button data-tab="obowl">Overall Bowling</button>
+      <button data-tab="matches">Matches</button>
+    </div>
+    <div id="filters" class="filters hidden">
+      <label>Team
+        <select id="teamFilter"><option value="">All teams</option></select>
+      </label>
+      <label>Players <span class="hint">Ctrl/Cmd-click for multiple</span>
+        <select id="playerFilter" multiple size="6"></select>
+      </label>
+    </div>
+    <div id="sortControls" class="filters hidden">
+      <label>Sort by
+        <select id="sortKey"></select>
+      </label>
+      <label>Order
+        <select id="sortDir">
+          <option value="desc">Descending</option>
+          <option value="asc">Ascending</option>
+        </select>
+      </label>
+    </div>
+    <div id="table"></div>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
