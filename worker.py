@@ -376,30 +376,42 @@ def parse_ballfeed(data):
                 rd = str(b.get("runsDisplay", "")).strip().lower()
                 raw_runs = parse_int(b.get("runs", b.get("batsmanRuns", 0)))
 
-                # Prefer the delivery chip when it explicitly describes the
-                # delivery. This avoids treating extras as batter runs.
-                # Examples: 4, 6, 2nb, 1wd, 2b, W.
+                # CricClubs' runsDisplay is a delivery chip.  For batting
+                # statistics we need the RUNS OFF THE BAT, not the total
+                # delivery runs.  In particular, a no-ball boundary is often
+                # displayed as 5nb (4 bat + 1 no-ball), while a bye/leg-bye is
+                # displayed as 1b/1lb and must contribute zero to the batter.
                 runs = raw_runs
+                chip_batter_runs = None
                 m_rd = re.match(r"^(\d+)(wd|nb|b|lb)?$", rd)
                 if m_rd:
                     chip_runs = int(m_rd.group(1))
                     suffix = m_rd.group(2) or ""
-                    if suffix == "wd" or suffix in {"b", "lb"}:
-                        runs = 0
+                    if suffix in {"wd", "b", "lb"}:
+                        chip_batter_runs = 0
                     elif suffix == "nb":
-                        runs = max(0, chip_runs - 1)
+                        chip_batter_runs = max(0, chip_runs - 1)
                     else:
-                        runs = chip_runs
+                        chip_batter_runs = chip_runs
                 elif rd in {".", "w"}:
+                    chip_batter_runs = 0
+
+                if chip_batter_runs is not None:
+                    runs = chip_batter_runs
+                elif kind["nb"]:
+                    # When the chip is unavailable, b.runs is the delivery
+                    # total in CricClubs feeds, so remove the no-ball extra.
+                    runs = max(0, raw_runs - 1)
+                elif kind["wide"] or kind["bye"]:
                     runs = 0
 
                 if not kind["wide"]:
                     s["balls"] += 1
                     if not kind["bye"]:
-                        # A no-ball's chip includes the one-run no-ball extra.
-                        if kind["nb"] and not m_rd:
-                            runs = max(0, runs - 1)
                         s["runs"] += runs
+                        # Boundary counts must use batter runs specifically.
+                        # This correctly handles 4, 6, 5nb (4+1), 7nb (6+1),
+                        # and excludes byes/leg-byes/wides.
                         if runs == 4:
                             s["fours"] += 1
                         elif runs == 6:
