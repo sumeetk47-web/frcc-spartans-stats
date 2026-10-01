@@ -6,3 +6,6 @@ select[multiple] { min-width: 240px; min-height: 120px; }
 #sortControls { margin-top: -4px; }
 
 .tablewrap th.sortable{cursor:pointer;user-select:none}.tablewrap th.sortable:hover{background:#eef2f6}.tablewrap th.sortable::after{content:" ↕";opacity:.35;font-size:.8em}.tablewrap th.sortable.sorted::after{content:""}.tablewrap th.sorted{font-weight:800}
+.ground-group{margin:18px 0 26px}.ground-group h3{margin:0 0 8px;padding:10px 12px;background:#f3f4f6;border-left:4px solid #444;border-radius:4px}.ground-group .tablewrap{margin-bottom:0}
+
+.ground-group{margin:18px 0 26px}.ground-group h3{margin:0 0 8px;padding:10px 12px;background:#f3f4f6;border-left:4px solid #444;border-radius:4px}.ground-group .tablewrap{margin-bottom:0}
