@@ -204,8 +204,8 @@ def extract_official_batting(summary):
         name = next((v for k, v in lower.items() if k in name_keys and isinstance(v, str) and v.strip()), None)
         runs = next((v for k, v in lower.items() if k in run_keys and v not in (None, "")), None)
         balls = next((v for k, v in lower.items() if k in ball_keys and v not in (None, "")), None)
-        fours = next((v for k, v in lower.items() if k in four_keys and v not in (None, "")), 0)
-        sixes = next((v for k, v in lower.items() if k in six_keys and v not in (None, "")), 0)
+        fours = next((v for k, v in lower.items() if k in four_keys and v not in (None, "")), None)
+        sixes = next((v for k, v in lower.items() if k in six_keys and v not in (None, "")), None)
         sr = next((v for k, v in lower.items() if k in sr_keys and v not in (None, "")), None)
         if name is None or runs is None or balls is None:
             continue
@@ -222,8 +222,8 @@ def extract_official_batting(summary):
             "name": str(name).strip(),
             "runs": parse_int(runs),
             "balls": parse_int(balls),
-            "fours": parse_int(fours),
-            "sixes": parse_int(sixes),
+            "fours": parse_int(fours) if fours is not None else None,
+            "sixes": parse_int(sixes) if sixes is not None else None,
             "strike_rate": float(sr) if sr not in (None, "") and re.match(r"^[\d.]+$", str(sr)) else None,
             "dismissed": dismissed,
         })
@@ -496,22 +496,24 @@ def run_job(job_id, jobs, lock):
                         matched = match_batter_name(official["name"], inn["batting"].keys())
                         if matched:
                             calc = inn["batting"][matched]
-                            if calc["runs"] != official["runs"] or calc["balls"] != official["balls"] or calc["fours"] != official["fours"] or calc["sixes"] != official["sixes"]:
+                            if (official.get("runs") is not None and calc["runs"] != official["runs"]) or (official.get("balls") is not None and calc["balls"] != official["balls"]) or (official.get("fours") is not None and calc["fours"] != official["fours"]) or (official.get("sixes") is not None and calc["sixes"] != official["sixes"]):
                                 data_quality_rows.append({
                                     "match_id": mid, "date": dt, "ground": ground,
                                     "team": batting_team, "player": official["name"],
                                     "official_runs": official["runs"], "calculated_runs": calc["runs"],
                                     "difference": official["runs"] - calc["runs"],
                                     "official_balls": official["balls"], "calculated_balls": calc["balls"],
-                                    "official_fours": official["fours"], "calculated_fours": calc["fours"],
-                                    "official_sixes": official["sixes"], "calculated_sixes": calc["sixes"],
+                                    "official_fours": official.get("fours"), "calculated_fours": calc["fours"],
+                                    "official_sixes": official.get("sixes"), "calculated_sixes": calc["sixes"],
                                     "source": "CricClubs scorecard summary"
                                 })
-                            calc.update({
-                                "runs": official["runs"], "balls": official["balls"],
-                                "fours": official["fours"], "sixes": official["sixes"],
-                                "dismissed": official["dismissed"] or calc.get("dismissed", False),
-                            })
+                            # The scorecard is authoritative field-by-field.
+                            # Only replace a calculated value when CricClubs actually
+                            # supplied that field; a missing field must not become 0.
+                            for field in ("runs", "balls", "fours", "sixes"):
+                                if official.get(field) is not None:
+                                    calc[field] = official[field]
+                            calc["dismissed"] = official["dismissed"] or calc.get("dismissed", False)
                             if official.get("strike_rate") is not None:
                                 calc["sr"] = official["strike_rate"]
                     bowling_team = "Unknown"
