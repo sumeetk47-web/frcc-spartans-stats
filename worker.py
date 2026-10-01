@@ -180,6 +180,73 @@ def parse_int(v, default=0):
     except Exception:
         return default
 
+def extract_official_batting(summary):
+    """Extract batting rows exposed by getScoreCardSummary.
+
+    CricClubs only exposes the top three batters in the summary.  Those
+    figures are authoritative and are used to correct/reconcile the
+    ball-by-ball reconstruction when a player appears there.
+    """
+    rows = []
+    seen = set()
+    name_keys = {"batsmanname", "battername", "playername", "batsman", "batter", "name"}
+    run_keys = {"runs", "batsmanruns", "batterruns", "battingruns", "runsscored"}
+    ball_keys = {"balls", "ballsplayed", "ballsface", "ballsFaced".lower()}
+    four_keys = {"fours", "four", "boundaries4", "fourscount"}
+    six_keys = {"sixes", "six", "boundaries6", "sixescount"}
+    sr_keys = {"strikerate", "sr"}
+    out_keys = {"out", "dismissed", "isout", "outstatus"}
+
+    for d in recursive_objects(summary):
+        if not isinstance(d, dict):
+            continue
+        lower = {str(k).lower(): v for k, v in d.items()}
+        name = next((v for k, v in lower.items() if k in name_keys and isinstance(v, str) and v.strip()), None)
+        runs = next((v for k, v in lower.items() if k in run_keys and v not in (None, "")), None)
+        balls = next((v for k, v in lower.items() if k in ball_keys and v not in (None, "")), None)
+        fours = next((v for k, v in lower.items() if k in four_keys and v not in (None, "")), 0)
+        sixes = next((v for k, v in lower.items() if k in six_keys and v not in (None, "")), 0)
+        sr = next((v for k, v in lower.items() if k in sr_keys and v not in (None, "")), None)
+        if name is None or runs is None or balls is None:
+            continue
+        # Avoid treating generic summary totals as player rows.
+        if norm(name) in {"total", "extras", "fallofwickets", "yetotbat"}:
+            continue
+        key = norm(name)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out_val = next((v for k, v in lower.items() if k in out_keys), None)
+        dismissed = bool(out_val) if isinstance(out_val, bool) else bool(out_val and str(out_val).lower() not in {"not out", "notout", "no", "false", "0"})
+        rows.append({
+            "name": str(name).strip(),
+            "runs": parse_int(runs),
+            "balls": parse_int(balls),
+            "fours": parse_int(fours),
+            "sixes": parse_int(sixes),
+            "strike_rate": float(sr) if sr not in (None, "") and re.match(r"^[\d.]+$", str(sr)) else None,
+            "dismissed": dismissed,
+        })
+    return rows
+
+def match_batter_name(official_name, candidates):
+    """Match a full summary name to CricClubs' abbreviated ball-feed name."""
+    target = norm(official_name)
+    if not target:
+        return None
+    for c in candidates:
+        if norm(c) == target:
+            return c
+    # CricClubs commonly abbreviates the final name component to an initial.
+    ot = str(official_name).strip().lower().split()
+    for c in candidates:
+        ct = str(c).strip().lower().split()
+        if len(ct) == len(ot) and all(a == b or (len(b) == 1 and a.startswith(b)) or (len(a) == 1 and b.startswith(a)) for a, b in zip(ot, ct)):
+            return c
+        if len(ct) < len(ot) and all(a == b or (len(b) == 1 and a.startswith(b)) for a, b in zip(ot, ct)):
+            return c
+    return None
+
 def parse_ballfeed(data):
     """Reconstruct full innings from CricClubs getBallByBall.
 
@@ -306,19 +373,31 @@ def parse_ballfeed(data):
                     continue
 
                 kind = ball_kind(b)
-                rd = str(b.get("runsDisplay", "")).strip()
-                runs = parse_int(b.get("runs", b.get("batsmanRuns", 0)))
+                rd = str(b.get("runsDisplay", "")).strip().lower()
+                raw_runs = parse_int(b.get("runs", b.get("batsmanRuns", 0)))
 
-                # runsDisplay is authoritative for common delivery chips.
-                if rd in {"4", "6"}:
-                    runs = int(rd)
+                # Prefer the delivery chip when it explicitly describes the
+                # delivery. This avoids treating extras as batter runs.
+                # Examples: 4, 6, 2nb, 1wd, 2b, W.
+                runs = raw_runs
+                m_rd = re.match(r"^(\d+)(wd|nb|b|lb)?$", rd)
+                if m_rd:
+                    chip_runs = int(m_rd.group(1))
+                    suffix = m_rd.group(2) or ""
+                    if suffix == "wd" or suffix in {"b", "lb"}:
+                        runs = 0
+                    elif suffix == "nb":
+                        runs = max(0, chip_runs - 1)
+                    else:
+                        runs = chip_runs
+                elif rd in {".", "w"}:
+                    runs = 0
 
                 if not kind["wide"]:
                     s["balls"] += 1
                     if not kind["bye"]:
-                        if kind["nb"] and runs > 0:
-                            # On a no-ball, the no-ball extra is separate from
-                            # batsman runs; CricClubs' runs value is the total.
+                        # A no-ball's chip includes the one-run no-ball extra.
+                        if kind["nb"] and not m_rd:
                             runs = max(0, runs - 1)
                         s["runs"] += runs
                         if runs == 4:
@@ -369,6 +448,7 @@ def run_job(job_id, jobs, lock):
         batting_rows = []
         bowling_rows = []
         errors = []
+        data_quality_rows = []
 
         for i, fixture in enumerate(fixtures, 1):
             mid = identify_match_id(fixture)
@@ -393,10 +473,35 @@ def run_job(job_id, jobs, lock):
                 }
                 matches.append(match_record)
 
+                official_batting = extract_official_batting(summary)
                 for inn in parse_ballfeed(balls):
                     batting_team = inn["team"]
-                    spartans_batting = is_spartans(batting_team)
                     batting_team = inn.get("team") or "Unknown"
+                    # Reconcile any batter exposed by the official summary.
+                    # The summary is authoritative for those rows; the ball feed
+                    # remains the source for everyone else.
+                    for official in official_batting:
+                        matched = match_batter_name(official["name"], inn["batting"].keys())
+                        if matched:
+                            calc = inn["batting"][matched]
+                            if calc["runs"] != official["runs"] or calc["balls"] != official["balls"] or calc["fours"] != official["fours"] or calc["sixes"] != official["sixes"]:
+                                data_quality_rows.append({
+                                    "match_id": mid, "date": dt, "ground": ground,
+                                    "team": batting_team, "player": official["name"],
+                                    "official_runs": official["runs"], "calculated_runs": calc["runs"],
+                                    "difference": official["runs"] - calc["runs"],
+                                    "official_balls": official["balls"], "calculated_balls": calc["balls"],
+                                    "official_fours": official["fours"], "calculated_fours": calc["fours"],
+                                    "official_sixes": official["sixes"], "calculated_sixes": calc["sixes"],
+                                    "source": "CricClubs scorecard summary"
+                                })
+                            calc.update({
+                                "runs": official["runs"], "balls": official["balls"],
+                                "fours": official["fours"], "sixes": official["sixes"],
+                                "dismissed": official["dismissed"] or calc.get("dismissed", False),
+                            })
+                            if official.get("strike_rate") is not None:
+                                calc["sr"] = official["strike_rate"]
                     bowling_team = "Unknown"
                     if len(teams) >= 2:
                         bowling_team = next((t for t in teams if norm(t) != norm(batting_team)), "Unknown")
@@ -498,6 +603,7 @@ def run_job(job_id, jobs, lock):
             "ground_bowling":bowl_inn.fillna("").to_dict("records"),
             "overall_batting":overall_bat.fillna("").to_dict("records"),
             "overall_bowling":overall_bowl.fillna("").to_dict("records"),
+            "data_quality": pd.DataFrame(data_quality_rows).fillna("").to_dict("records"),
             "errors":errors
         }
         (outdir/"result.json").write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
@@ -511,6 +617,7 @@ def run_job(job_id, jobs, lock):
             bowl_inn.to_excel(w, "Ground Bowling", index=False)
             overall_bat.to_excel(w, "Overall Batting", index=False)
             overall_bowl.to_excel(w, "Overall Bowling", index=False)
+            pd.DataFrame(data_quality_rows).to_excel(w, "Data Quality", index=False)
             pd.DataFrame(errors).to_excel(w, "Errors", index=False)
         # Publish the latest successful result as the shared server-side cache.
         cache_dir = Path("data") / "cache"
