@@ -247,6 +247,16 @@ def match_batter_name(official_name, candidates):
             return c
     return None
 
+def over_phase(over_no):
+    """Return the requested T20 scoring phase for a 1-based over number."""
+    if 1 <= over_no <= 6:
+        return "1-6"
+    if 7 <= over_no <= 16:
+        return "7-16"
+    if 17 <= over_no <= 20:
+        return "17-20"
+    return "Other"
+
 def parse_ballfeed(data):
     """Reconstruct full innings from CricClubs getBallByBall.
 
@@ -270,8 +280,17 @@ def parse_ballfeed(data):
             "runs": 0, "balls": 0, "fours": 0, "sixes": 0,
             "dismissed": False, "how_out": ""
         })
+        # Phase figures are delivery-derived because CricClubs' summary does
+        # not expose batting/bowling splits by over phase.
+        phase_batting = defaultdict(lambda: defaultdict(lambda: {
+            "runs": 0, "balls": 0, "fours": 0, "sixes": 0, "dismissed": False
+        }))
+        phase_bowling = defaultdict(lambda: defaultdict(lambda: {
+            "balls": 0, "maidens": 0, "runs": 0, "wickets": 0
+        }))
         batting_order = []
         bowling = {}
+        previous_bowling_totals = {}
 
         def batter(name):
             if not name:
@@ -346,15 +365,21 @@ def parse_ballfeed(data):
             over_items.append((over_no, key, over))
         over_items.sort(key=lambda x: x[0])
 
-        for _, _, over in over_items:
+        for over_no, _, over in over_items:
+            phase = over_phase(over_no)
             bowler_name = over.get("bowlerName")
+            bowler_snapshot = None
             if bowler_name:
                 name = str(bowler_name).strip()
+                bowler_snapshot = {
+                    field: (parse_int(over.get("bowler" + field.capitalize())) if over.get("bowler" + field.capitalize()) not in (None, "") else None)
+                    for field in ("balls", "maidens", "runs", "wickets")
+                }
                 bowling[name] = {
-                    "balls": parse_int(over.get("bowlerBalls")),
-                    "maidens": parse_int(over.get("bowlerMaidens")),
-                    "runs": parse_int(over.get("bowlerRuns")),
-                    "wickets": parse_int(over.get("bowlerWickets")),
+                    "balls": bowler_snapshot["balls"] or 0,
+                    "maidens": bowler_snapshot["maidens"] or 0,
+                    "runs": bowler_snapshot["runs"] or 0,
+                    "wickets": bowler_snapshot["wickets"] or 0,
                 }
 
             balls = over.get("balls") or over.get("ballList") or []
@@ -410,15 +435,43 @@ def parse_ballfeed(data):
                     if not kind["bye"]:
                         s["runs"] += runs
                         # Boundary counts must use batter runs specifically.
-                        # This correctly handles 4, 6, 5nb (4+1), 7nb (6+1),
-                        # and excludes byes/leg-byes/wides.
                         if runs == 4:
                             s["fours"] += 1
                         elif runs == 6:
                             s["sixes"] += 1
 
+                # Phase batting figures are intentionally delivery-derived.
+                ps = phase_batting[phase][striker]
+                if not kind["wide"]:
+                    ps["balls"] += 1
+                    if not kind["bye"]:
+                        ps["runs"] += runs
+                        if runs == 4:
+                            ps["fours"] += 1
+                        elif runs == 6:
+                            ps["sixes"] += 1
+
                 if kind["wicket"]:
+                    ps["dismissed"] = True
                     apply_out_commentary(b)
+
+            # Each OverN bowling snapshot is cumulative for that bowler.
+            if bowler_name and bowler_snapshot is not None:
+                name = str(bowler_name).strip()
+                prev = previous_bowling_totals.get(name, {"balls":0,"maidens":0,"runs":0,"wickets":0})
+                delta = {}
+                for field in ("balls", "maidens", "runs", "wickets"):
+                    cur = bowler_snapshot.get(field)
+                    delta[field] = None if cur is None else max(0, cur - prev.get(field, 0))
+                previous_bowling_totals[name] = {
+                    field: bowler_snapshot[field] if bowler_snapshot.get(field) is not None else prev.get(field, 0)
+                    for field in ("balls", "maidens", "runs", "wickets")
+                }
+                pb = phase_bowling[phase][name]
+                pb["balls"] += delta["balls"] if delta["balls"] is not None else sum(1 for b in balls if not ball_kind(b)["wide"])
+                pb["maidens"] += delta["maidens"] or 0
+                pb["runs"] += delta["runs"] if delta["runs"] is not None else 0
+                pb["wickets"] += delta["wickets"] if delta["wickets"] is not None else 0
 
         # Mark wickets from a dismissal commentary even when runsDisplay isn't W.
         # This is a fallback for older CricClubs feeds.
@@ -426,9 +479,12 @@ def parse_ballfeed(data):
             b["dismissed"] = bool(b.get("dismissed"))
 
         results.append({
+            "innings_label": label,
             "team": inn.get("teamName") or first_value(inn, ["teamName"]) or "",
             "batting": {name: batting[name] for name in batting_order},
             "bowling": bowling,
+            "phase_batting": {phase: dict(players) for phase, players in phase_batting.items()},
+            "phase_bowling": {phase: dict(players) for phase, players in phase_bowling.items()},
             "raw": inn,
         })
     return results
@@ -459,6 +515,8 @@ def run_job(job_id, jobs, lock):
         matches = []
         batting_rows = []
         bowling_rows = []
+        phase_batting_rows = []
+        phase_bowling_rows = []
         errors = []
         data_quality_rows = []
 
@@ -539,6 +597,34 @@ def run_job(job_id, jobs, lock):
                             "wickets":x["wickets"],
                             "economy":round(6*x["runs"]/b,2) if b else 0
                         })
+                    # Phase-specific figures are delivery/over derived.
+                    # Official scorecards do not provide these splits, so they
+                    # remain separate from the corrected all-overs totals.
+                    innings_id = f"{mid}:{inn.get('innings_label', '')}"
+                    for phase, players in inn.get("phase_batting", {}).items():
+                        for player, x in players.items():
+                            if not any(x.get(k, 0) for k in ("runs", "balls", "fours", "sixes")) and not x.get("dismissed"):
+                                continue
+                            phase_batting_rows.append({
+                                "match_id": mid, "date": dt, "ground": ground,
+                                "innings_id": innings_id, "phase": phase,
+                                "team": batting_team, "opponent": bowling_team,
+                                "player": player, "runs": x["runs"], "balls": x["balls"],
+                                "fours": x["fours"], "sixes": x["sixes"],
+                                "dismissed": x.get("dismissed", False)
+                            })
+                    for phase, players in inn.get("phase_bowling", {}).items():
+                        for player, x in players.items():
+                            if not any(x.get(k, 0) for k in ("balls", "maidens", "runs", "wickets")):
+                                continue
+                            phase_bowling_rows.append({
+                                "match_id": mid, "date": dt, "ground": ground,
+                                "innings_id": innings_id, "phase": phase,
+                                "team": bowling_team, "opponent": batting_team,
+                                "player": player, "balls": x["balls"],
+                                "maidens": x["maidens"], "runs_conceded": x["runs"],
+                                "wickets": x["wickets"]
+                            })
             except Exception as e:
                 errors.append({"match_id":mid, "error":str(e)})
 
@@ -606,6 +692,55 @@ def run_job(job_id, jobs, lock):
             overall_bowl["average"] = overall_bowl.apply(
                 lambda r: round(r["runs_conceded"]/r["wickets"],2) if r["wickets"] else None, axis=1)
 
+        # Phase tables (1-6, 7-16, 17-20) are derived from ball-by-ball/over
+        # data. "All Overs" continues to use the official-scorecard-reconciled
+        # tables above.
+        phase_order = ["1-6", "7-16", "17-20"]
+        pbat = pd.DataFrame(phase_batting_rows)
+        if pbat.empty:
+            phase_bat_ground = pd.DataFrame(columns=["team","ground","phase","player","matches","innings","runs","balls","fours","sixes","strike_rate","average","highest_score"])
+            phase_bat_overall = phase_bat_ground.copy()
+        else:
+            pbat["out"] = pbat["dismissed"].astype(bool)
+            phase_bat_ground = pbat.groupby(["team","ground","phase","player"], as_index=False).agg(
+                matches=("match_id","nunique"), innings=("innings_id","nunique"),
+                runs=("runs","sum"), balls=("balls","sum"), fours=("fours","sum"),
+                sixes=("sixes","sum"), dismissals=("out","sum"), highest_score=("runs","max"))
+            phase_bat_ground["strike_rate"] = (100*phase_bat_ground["runs"]/phase_bat_ground["balls"]).round(2)
+            phase_bat_ground["average"] = phase_bat_ground.apply(lambda r: round(r["runs"]/r["dismissals"],2) if r["dismissals"] else None, axis=1)
+            phase_bat_ground.drop(columns=["dismissals"], inplace=True)
+            phase_bat_overall = pbat.groupby(["team","phase","player"], as_index=False).agg(
+                matches=("match_id","nunique"), innings=("innings_id","nunique"),
+                runs=("runs","sum"), balls=("balls","sum"), fours=("fours","sum"),
+                sixes=("sixes","sum"), dismissals=("out","sum"), highest_score=("runs","max"))
+            phase_bat_overall["strike_rate"] = (100*phase_bat_overall["runs"]/phase_bat_overall["balls"]).round(2)
+            phase_bat_overall["average"] = phase_bat_overall.apply(lambda r: round(r["runs"]/r["dismissals"],2) if r["dismissals"] else None, axis=1)
+            phase_bat_overall.drop(columns=["dismissals"], inplace=True)
+
+        pbow = pd.DataFrame(phase_bowling_rows)
+        if pbow.empty:
+            phase_bowl_ground = pd.DataFrame(columns=["team","ground","phase","player","matches","innings","balls","overs","maidens","runs_conceded","wickets","economy","average","best_figures"])
+            phase_bowl_overall = phase_bowl_ground.copy()
+        else:
+            phase_bowl_ground = pbow.groupby(["team","ground","phase","player"], as_index=False).agg(
+                matches=("match_id","nunique"), innings=("innings_id","nunique"),
+                balls=("balls","sum"), maidens=("maidens","sum"),
+                runs_conceded=("runs_conceded","sum"), wickets=("wickets","sum"))
+            phase_bowl_ground["overs"] = phase_bowl_ground["balls"].apply(lambda x:f"{x//6}.{x%6}")
+            phase_bowl_ground["economy"] = (6*phase_bowl_ground["runs_conceded"]/phase_bowl_ground["balls"]).round(2)
+            phase_bowl_ground["average"] = phase_bowl_ground.apply(lambda r: round(r["runs_conceded"]/r["wickets"],2) if r["wickets"] else None, axis=1)
+            best = pbow.groupby(["team","ground","phase","player"]).apply(lambda g: g.sort_values(["wickets","runs_conceded"], ascending=[False,True]).iloc[0], include_groups=False)
+            phase_bowl_ground["best_figures"] = [f'{int(row["wickets"])}-{int(row["runs_conceded"])}' for _, row in best.iterrows()]
+            phase_bowl_overall = pbow.groupby(["team","phase","player"], as_index=False).agg(
+                matches=("match_id","nunique"), innings=("innings_id","nunique"),
+                balls=("balls","sum"), maidens=("maidens","sum"),
+                runs_conceded=("runs_conceded","sum"), wickets=("wickets","sum"))
+            phase_bowl_overall["overs"] = phase_bowl_overall["balls"].apply(lambda x:f"{x//6}.{x%6}")
+            phase_bowl_overall["economy"] = (6*phase_bowl_overall["runs_conceded"]/phase_bowl_overall["balls"]).round(2)
+            phase_bowl_overall["average"] = phase_bowl_overall.apply(lambda r: round(r["runs_conceded"]/r["wickets"],2) if r["wickets"] else None, axis=1)
+            best = pbow.groupby(["team","phase","player"]).apply(lambda g: g.sort_values(["wickets","runs_conceded"], ascending=[False,True]).iloc[0], include_groups=False)
+            phase_bowl_overall["best_figures"] = [f'{int(row["wickets"])}-{int(row["runs_conceded"])}' for _, row in best.iterrows()]
+
         ground_summary = mat.groupby("ground", as_index=False).agg(
             matches=("match_id","nunique"))
         result = {
@@ -617,6 +752,11 @@ def run_job(job_id, jobs, lock):
             "ground_bowling":bowl_inn.fillna("").to_dict("records"),
             "overall_batting":overall_bat.fillna("").to_dict("records"),
             "overall_bowling":overall_bowl.fillna("").to_dict("records"),
+            "phase_ground_batting":phase_bat_ground.fillna("").to_dict("records"),
+            "phase_ground_bowling":phase_bowl_ground.fillna("").to_dict("records"),
+            "phase_overall_batting":phase_bat_overall.fillna("").to_dict("records"),
+            "phase_overall_bowling":phase_bowl_overall.fillna("").to_dict("records"),
+            "phase_order": phase_order,
             "data_quality": pd.DataFrame(data_quality_rows).fillna("").to_dict("records"),
             "errors":errors
         }
@@ -631,6 +771,10 @@ def run_job(job_id, jobs, lock):
             bowl_inn.to_excel(w, "Ground Bowling", index=False)
             overall_bat.to_excel(w, "Overall Batting", index=False)
             overall_bowl.to_excel(w, "Overall Bowling", index=False)
+            phase_bat_ground.to_excel(w, "Phase Batting", index=False)
+            phase_bowl_ground.to_excel(w, "Phase Bowling", index=False)
+            phase_bat_overall.to_excel(w, "Phase Overall Batting", index=False)
+            phase_bowl_overall.to_excel(w, "Phase Overall Bowling", index=False)
             pd.DataFrame(data_quality_rows).to_excel(w, "Data Quality", index=False)
             pd.DataFrame(errors).to_excel(w, "Errors", index=False)
         # Publish the latest successful result as the shared server-side cache.

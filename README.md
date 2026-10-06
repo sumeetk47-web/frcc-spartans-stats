@@ -48,3 +48,13 @@ same RSA/PKCS#1 v1.5 timestamp token used by the CricClubs app.
   functions in `worker.py`.
 - Respect CricClubs' terms and rate limits. The app uses a modest delay between
   matches.
+
+### Over-phase analysis
+
+The dashboard now supports phase-specific batting and bowling views for:
+- All Overs
+- 1–6 Overs
+- 7–16 Overs
+- 17–20 Overs
+
+Phase figures are derived from CricClubs ball-by-ball/over data because the scorecard summary does not expose phase splits. The existing All Overs figures continue to use official scorecard values where available, with ball-by-ball as fallback.
