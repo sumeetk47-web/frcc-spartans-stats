@@ -2,7 +2,7 @@ let result=null, timer=null, active="summary", selectedTeam="", selectedGround="
 const $=id=>document.getElementById(id);
 $("run").onclick=async()=>{
   $("run").disabled=true; $("content").classList.add("hidden"); $("download").classList.add("hidden");
-  const r=await fetch("/api/jobs",{method:"POST"}); const j=await r.json();
+  const r=await fetch("/api/jobs?refresh=1",{method:"POST"}); const j=await r.json();
   timer=setInterval(()=>poll(j.job_id),700); poll(j.job_id);
 };
 async function poll(id){
