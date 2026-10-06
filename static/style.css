@@ -9,3 +9,20 @@ select[multiple] { min-width: 240px; min-height: 120px; }
 
 .ground-group { margin: 0 0 24px; }
 .ground-group h3 { margin: 0 0 8px; }
+
+/* Compact batting shot count + percentage */
+.shot-stat {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.05;
+  white-space: nowrap;
+}
+.shot-stat strong {
+  font-weight: 700;
+}
+.shot-stat .shot-pct {
+  font-size: 0.72em;
+  opacity: 0.68;
+  margin-top: 2px;
+}
