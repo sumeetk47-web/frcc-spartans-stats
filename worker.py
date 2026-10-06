@@ -192,6 +192,9 @@ def extract_official_batting(summary):
     name_keys = {"batsmanname", "battername", "playername", "batsman", "batter", "name"}
     run_keys = {"runs", "batsmanruns", "batterruns", "battingruns", "runsscored"}
     ball_keys = {"balls", "ballsplayed", "ballsface", "ballsFaced".lower()}
+    one_keys = {"ones", "one", "singles", "onescount"}
+    two_keys = {"twos", "two", "doubles", "twoscount"}
+    three_keys = {"threes", "three", "triples", "threescount"}
     four_keys = {"fours", "four", "boundaries4", "fourscount"}
     six_keys = {"sixes", "six", "boundaries6", "sixescount"}
     sr_keys = {"strikerate", "sr"}
@@ -204,6 +207,9 @@ def extract_official_batting(summary):
         name = next((v for k, v in lower.items() if k in name_keys and isinstance(v, str) and v.strip()), None)
         runs = next((v for k, v in lower.items() if k in run_keys and v not in (None, "")), None)
         balls = next((v for k, v in lower.items() if k in ball_keys and v not in (None, "")), None)
+        ones = next((v for k, v in lower.items() if k in one_keys and v not in (None, "")), None)
+        twos = next((v for k, v in lower.items() if k in two_keys and v not in (None, "")), None)
+        threes = next((v for k, v in lower.items() if k in three_keys and v not in (None, "")), None)
         fours = next((v for k, v in lower.items() if k in four_keys and v not in (None, "")), None)
         sixes = next((v for k, v in lower.items() if k in six_keys and v not in (None, "")), None)
         sr = next((v for k, v in lower.items() if k in sr_keys and v not in (None, "")), None)
@@ -222,6 +228,9 @@ def extract_official_batting(summary):
             "name": str(name).strip(),
             "runs": parse_int(runs),
             "balls": parse_int(balls),
+            "ones": parse_int(ones) if ones is not None else None,
+            "twos": parse_int(twos) if twos is not None else None,
+            "threes": parse_int(threes) if threes is not None else None,
             "fours": parse_int(fours) if fours is not None else None,
             "sixes": parse_int(sixes) if sixes is not None else None,
             "strike_rate": float(sr) if sr not in (None, "") and re.match(r"^[\d.]+$", str(sr)) else None,
@@ -277,13 +286,13 @@ def parse_ballfeed(data):
             continue
 
         batting = defaultdict(lambda: {
-            "runs": 0, "balls": 0, "fours": 0, "sixes": 0,
+            "runs": 0, "balls": 0, "ones": 0, "twos": 0, "threes": 0, "fours": 0, "sixes": 0,
             "dismissed": False, "how_out": ""
         })
         # Phase figures are delivery-derived because CricClubs' summary does
         # not expose batting/bowling splits by over phase.
         phase_batting = defaultdict(lambda: defaultdict(lambda: {
-            "runs": 0, "balls": 0, "fours": 0, "sixes": 0, "dismissed": False
+            "runs": 0, "balls": 0, "ones": 0, "twos": 0, "threes": 0, "fours": 0, "sixes": 0, "dismissed": False
         }))
         phase_bowling = defaultdict(lambda: defaultdict(lambda: {
             "balls": 0, "maidens": 0, "runs": 0, "wickets": 0
@@ -435,7 +444,13 @@ def parse_ballfeed(data):
                     if not kind["bye"]:
                         s["runs"] += runs
                         # Boundary counts must use batter runs specifically.
-                        if runs == 4:
+                        if runs == 1:
+                            s["ones"] += 1
+                        elif runs == 2:
+                            s["twos"] += 1
+                        elif runs == 3:
+                            s["threes"] += 1
+                        elif runs == 4:
                             s["fours"] += 1
                         elif runs == 6:
                             s["sixes"] += 1
@@ -447,7 +462,13 @@ def parse_ballfeed(data):
                         ps["balls"] += 1
                         if not kind["bye"]:
                             ps["runs"] += runs
-                            if runs == 4:
+                            if runs == 1:
+                                ps["ones"] += 1
+                            elif runs == 2:
+                                ps["twos"] += 1
+                            elif runs == 3:
+                                ps["threes"] += 1
+                            elif runs == 4:
                                 ps["fours"] += 1
                             elif runs == 6:
                                 ps["sixes"] += 1
@@ -555,13 +576,16 @@ def run_job(job_id, jobs, lock):
                         matched = match_batter_name(official["name"], inn["batting"].keys())
                         if matched:
                             calc = inn["batting"][matched]
-                            if (official.get("runs") is not None and calc["runs"] != official["runs"]) or (official.get("balls") is not None and calc["balls"] != official["balls"]) or (official.get("fours") is not None and calc["fours"] != official["fours"]) or (official.get("sixes") is not None and calc["sixes"] != official["sixes"]):
+                            if (official.get("runs") is not None and calc["runs"] != official["runs"]) or (official.get("balls") is not None and calc["balls"] != official["balls"]) or (official.get("ones") is not None and calc["ones"] != official["ones"]) or (official.get("twos") is not None and calc["twos"] != official["twos"]) or (official.get("threes") is not None and calc["threes"] != official["threes"]) or (official.get("fours") is not None and calc["fours"] != official["fours"]) or (official.get("sixes") is not None and calc["sixes"] != official["sixes"]):
                                 data_quality_rows.append({
                                     "match_id": mid, "date": dt, "ground": ground,
                                     "team": batting_team, "player": official["name"],
                                     "official_runs": official["runs"], "calculated_runs": calc["runs"],
                                     "difference": official["runs"] - calc["runs"],
                                     "official_balls": official["balls"], "calculated_balls": calc["balls"],
+                                    "official_ones": official.get("ones"), "calculated_ones": calc["ones"],
+                                    "official_twos": official.get("twos"), "calculated_twos": calc["twos"],
+                                    "official_threes": official.get("threes"), "calculated_threes": calc["threes"],
                                     "official_fours": official.get("fours"), "calculated_fours": calc["fours"],
                                     "official_sixes": official.get("sixes"), "calculated_sixes": calc["sixes"],
                                     "source": "CricClubs scorecard summary"
@@ -569,7 +593,7 @@ def run_job(job_id, jobs, lock):
                             # The scorecard is authoritative field-by-field.
                             # Only replace a calculated value when CricClubs actually
                             # supplied that field; a missing field must not become 0.
-                            for field in ("runs", "balls", "fours", "sixes"):
+                            for field in ("runs", "balls", "ones", "twos", "threes", "fours", "sixes"):
                                 if official.get(field) is not None:
                                     calc[field] = official[field]
                             calc["dismissed"] = official["dismissed"] or calc.get("dismissed", False)
@@ -584,6 +608,7 @@ def run_job(job_id, jobs, lock):
                             "match_id":mid,"date":dt,"ground":ground,
                             "team":batting_team,"opponent":bowling_team,
                             "player":player,"runs":x["runs"],"balls":x["balls"],
+                            "ones":x["ones"],"twos":x["twos"],"threes":x["threes"],
                             "fours":x["fours"],"sixes":x["sixes"],"strike_rate":sr,
                             "dismissed":x["dismissed"]
                         })
@@ -611,6 +636,7 @@ def run_job(job_id, jobs, lock):
                                 "innings_id": innings_id, "phase": phase,
                                 "team": batting_team, "opponent": bowling_team,
                                 "player": player, "runs": x["runs"], "balls": x["balls"],
+                                "ones": x["ones"], "twos": x["twos"], "threes": x["threes"],
                                 "fours": x["fours"], "sixes": x["sixes"],
                                 "dismissed": x.get("dismissed", False)
                             })
@@ -634,7 +660,7 @@ def run_job(job_id, jobs, lock):
         mat = pd.DataFrame(matches)
 
         if bat.empty:
-            bat = pd.DataFrame(columns=["team","ground","player","matches","innings","runs","balls","fours","sixes","strike_rate","average","highest_score"])
+            bat = pd.DataFrame(columns=["team","ground","player","matches","innings","runs","balls","ones","twos","threes","fours","sixes","strike_rate","average","highest_score"])
             bat_inn = bat.copy()
         else:
             bat["out"] = bat["dismissed"].astype(bool)
@@ -642,6 +668,7 @@ def run_job(job_id, jobs, lock):
             bat_inn = bat.groupby(["team","ground","player"], as_index=False).agg(
                 matches=("match_id","nunique"), innings=("match_id","size"),
                 runs=("runs","sum"), balls=("balls","sum"),
+                ones=("ones","sum"), twos=("twos","sum"), threes=("threes","sum"),
                 fours=("fours","sum"), sixes=("sixes","sum"),
                 dismissals=("out","sum"), highest_score=("runs","max"))
             bat_inn["strike_rate"] = (100*bat_inn["runs"]/bat_inn["balls"]).round(2)
@@ -674,6 +701,7 @@ def run_job(job_id, jobs, lock):
             overall_bat = bat.groupby(["team","player"], as_index=False).agg(
                 matches=("match_id","nunique"), innings=("match_id","size"),
                 runs=("runs","sum"), balls=("balls","sum"),
+                ones=("ones","sum"), twos=("twos","sum"), threes=("threes","sum"),
                 fours=("fours","sum"), sixes=("sixes","sum"),
                 dismissals=("out","sum"), highest_score=("runs","max"))
             overall_bat["strike_rate"] = (100*overall_bat["runs"]/overall_bat["balls"]).round(2)
@@ -699,20 +727,22 @@ def run_job(job_id, jobs, lock):
         phase_order = ["1-6", "7-16", "17-20"]
         pbat = pd.DataFrame(phase_batting_rows)
         if pbat.empty:
-            phase_bat_ground = pd.DataFrame(columns=["team","ground","phase","player","matches","innings","runs","balls","fours","sixes","strike_rate","average","highest_score"])
+            phase_bat_ground = pd.DataFrame(columns=["team","ground","phase","player","matches","innings","runs","balls","ones","twos","threes","fours","sixes","strike_rate","average","highest_score"])
             phase_bat_overall = phase_bat_ground.copy()
         else:
             pbat["out"] = pbat["dismissed"].astype(bool)
             phase_bat_ground = pbat.groupby(["team","ground","phase","player"], as_index=False).agg(
                 matches=("match_id","nunique"), innings=("innings_id","nunique"),
-                runs=("runs","sum"), balls=("balls","sum"), fours=("fours","sum"),
+                runs=("runs","sum"), balls=("balls","sum"), ones=("ones","sum"),
+                twos=("twos","sum"), threes=("threes","sum"), fours=("fours","sum"),
                 sixes=("sixes","sum"), dismissals=("out","sum"), highest_score=("runs","max"))
             phase_bat_ground["strike_rate"] = (100*phase_bat_ground["runs"]/phase_bat_ground["balls"]).round(2)
             phase_bat_ground["average"] = phase_bat_ground.apply(lambda r: round(r["runs"]/r["dismissals"],2) if r["dismissals"] else None, axis=1)
             phase_bat_ground.drop(columns=["dismissals"], inplace=True)
             phase_bat_overall = pbat.groupby(["team","phase","player"], as_index=False).agg(
                 matches=("match_id","nunique"), innings=("innings_id","nunique"),
-                runs=("runs","sum"), balls=("balls","sum"), fours=("fours","sum"),
+                runs=("runs","sum"), balls=("balls","sum"), ones=("ones","sum"),
+                twos=("twos","sum"), threes=("threes","sum"), fours=("fours","sum"),
                 sixes=("sixes","sum"), dismissals=("out","sum"), highest_score=("runs","max"))
             phase_bat_overall["strike_rate"] = (100*phase_bat_overall["runs"]/phase_bat_overall["balls"]).round(2)
             phase_bat_overall["average"] = phase_bat_overall.apply(lambda r: round(r["runs"]/r["dismissals"],2) if r["dismissals"] else None, axis=1)
