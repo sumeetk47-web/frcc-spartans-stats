@@ -1,4 +1,4 @@
-let result=null, timer=null, active="summary", selectedTeam="", selectedGround="", selectedPlayers=new Set(), sortKey="", sortDir="desc";
+let result=null, timer=null, active="summary", selectedTeam="", selectedPlayers=new Set(), sortKey="", sortDir="desc";
 let sortInitialized=false;
 const $=id=>document.getElementById(id);
 $("run").onclick=async()=>{
@@ -12,13 +12,12 @@ async function poll(id){
   if(j.status==="done"){
     clearInterval(timer); result=await (await fetch("/api/jobs/"+id+"/result")).json();
     $("content").classList.remove("hidden"); $("download").classList.remove("hidden");
-    $("download").href="/api/jobs/"+id+"/excel"; selectedTeam=""; selectedGround=""; selectedPlayers=new Set(); sortKey=""; render(); $("run").disabled=false;
+    $("download").href="/api/jobs/"+id+"/excel"; selectedTeam=""; selectedPlayers=new Set(); sortKey=""; render(); $("run").disabled=false;
   }
   if(j.status==="error"){clearInterval(timer);$("status").innerHTML='<span class="err">'+esc(j.message)+'</span>';$("run").disabled=false;}
 }
 document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{active=b.dataset.tab; sortKey=""; render()});
 $("teamFilter").onchange=()=>{selectedTeam=$("teamFilter").value; selectedPlayers=new Set([...selectedPlayers].filter(p=>availablePlayers().includes(p))); updatePlayerFilter(); render()};
-$("groundFilter").onchange=()=>{selectedGround=$("groundFilter").value; render()};
 $("playerFilter").onchange=()=>{selectedPlayers=new Set([...$("playerFilter").selectedOptions].map(o=>o.value)); render()};
 $("sortKey").onchange=()=>{sortKey=$("sortKey").value; render()};
 $("sortDir").onchange=()=>{sortDir=$("sortDir").value; render()};
@@ -28,13 +27,6 @@ function filterable(){return !!currentDataKey()}
 function availablePlayers(){
   const keys=["ground_batting","ground_bowling","overall_batting","overall_bowling"];
   return [...new Set(keys.flatMap(k=>(result[k]||[])).filter(r=>!selectedTeam||r.team===selectedTeam).map(r=>r.player).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
-}
-function updateGroundFilter(){
-  const keys=["ground_batting","ground_bowling","overall_batting","overall_bowling","matches"];
-  const grounds=[...new Set(keys.flatMap(k=>(result[k]||[])).map(r=>r.ground).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
-  const el=$("groundFilter"); const old=selectedGround;
-  el.innerHTML='<option value="">All grounds</option>'+grounds.map(g=>'<option value="'+esc(g)+'">'+esc(g)+"</option>").join("");
-  selectedGround=grounds.includes(old)?old:""; el.value=selectedGround;
 }
 function updateTeamFilter(){
   const keys=["ground_batting","ground_bowling","overall_batting","overall_bowling"];
@@ -51,7 +43,6 @@ function updatePlayerFilter(){
 function filteredRows(key){
   let rows=result[key]||[];
   if(selectedTeam && rows.some(r=>Object.prototype.hasOwnProperty.call(r,"team"))) rows=rows.filter(r=>r.team===selectedTeam);
-  if(selectedGround && rows.some(r=>Object.prototype.hasOwnProperty.call(r,"ground"))) rows=rows.filter(r=>r.ground===selectedGround);
   if(selectedPlayers.size && rows.some(r=>Object.prototype.hasOwnProperty.call(r,"player"))) rows=rows.filter(r=>selectedPlayers.has(r.player));
   return rows;
 }
@@ -75,7 +66,7 @@ function render(){
   const map={summary:["ground_summary","Ground Summary"],bat:["ground_batting","Ground Batting"],bowl:["ground_bowling","Ground Bowling"],obat:["overall_batting","Overall Batting"],obowl:["overall_bowling","Overall Bowling"],matches:["matches","Matches"]};
   const [key,title]=map[active];
   const f=filterable(); $("filters").classList.toggle("hidden",!f); $("sortControls").classList.toggle("hidden",!f);
-  updateTeamFilter(); updateGroundFilter(); updatePlayerFilter();
+  updateTeamFilter(); updatePlayerFilter();
   let rows=filteredRows(key);
   if(f){
     const opts=sortOptions(rows); const preferred=(active==="bat"||active==="obat")?"runs":"wickets";
@@ -85,32 +76,19 @@ function render(){
   }
   document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("active",b.dataset.tab===active));
   if(!rows.length){$("table").innerHTML="<p>No rows returned for the selected filters.</p>";return}
+  const cols=Object.keys(rows[0]);
   const sortable=f;
-  const renderTable=(tableRows)=>{
-    const cols=Object.keys(tableRows[0]);
-    const head=cols.map(c=>{
-      const label=c.replaceAll("_"," ").replace(/\b\w/g,m=>m.toUpperCase());
-      const isActive=sortable && c===sortKey;
-      const arrow=isActive?(sortDir==="asc"?" ↑":" ↓"):"";
-      return sortable ? `<th class="sortable ${isActive?"sorted":""}" data-sort="${esc(c)}" title="Click to sort by ${esc(label)}">${esc(label)}${arrow}</th>` : `<th>${esc(label)}</th>`;
-    }).join("");
-    return `<div class="tablewrap"><table><thead><tr>${head}</tr></thead><tbody>${tableRows.map(row=>"<tr>"+cols.map(c=>"<td>"+esc(row[c])+"</td>").join("")+"</tr>").join("")}</tbody></table></div>`;
-  };
-  const groupedGround=active==="bat"||active==="bowl";
-  if(groupedGround){
-    const groups=[...new Set(rows.map(r=>r.ground||"Unknown Ground"))].sort((a,b)=>a.localeCompare(b));
-    $("table").innerHTML=groups.map(g=>{
-      const groupRows=sortRows(rows.filter(r=>(r.ground||"Unknown Ground")===g));
-      return `<section class="ground-group"><h3>${esc(g)}</h3>${renderTable(groupRows)}</section>`;
-    }).join("");
-  }else{
-    rows=sortRows(rows);
-    $("table").innerHTML=renderTable(rows);
-  }
+  const head=cols.map(c=>{
+    const label=c.replaceAll("_"," ").replace(/\b\w/g,m=>m.toUpperCase());
+    const isActive=sortable && c===sortKey;
+    const arrow=isActive?(sortDir==="asc"?" ↑":" ↓"):"";
+    return sortable ? `<th class="sortable ${isActive?"sorted":""}" data-sort="${esc(c)}" title="Click to sort by ${esc(label)}">${esc(label)}${arrow}</th>` : `<th>${esc(label)}</th>`;
+  }).join("");
+  $("table").innerHTML=`<div class="tablewrap"><table><thead><tr>${head}</tr></thead><tbody>${rows.map(row=>"<tr>"+cols.map(c=>"<td>"+esc(row[c])+"</td>").join("")+"</tr>").join("")}</tbody></table></div>`;
   if(sortable){
     document.querySelectorAll("th.sortable").forEach(th=>th.onclick=()=>{
       const key=th.dataset.sort;
-      if(sortKey===key) sortDir=sortDir==="asc"?"desc":"asc"; else { sortKey=key; sortDir=(active==="bat"||active==="obat")&&key==="runs" || (active==="bowl"||active==="obowl")&&key==="wickets" ? "desc" : "asc"; }
+      if(sortKey===key) sortDir=sortDir==="asc"?"desc":"asc"; else { sortKey=key; sortDir=(active==="bat"||active==="obat")&&key==="runs"|| (active==="bowl"||active==="obowl")&&key==="wickets" ? "desc" : "asc"; }
       $("sortKey").value=sortKey; $("sortDir").value=sortDir; render();
     });
   }
