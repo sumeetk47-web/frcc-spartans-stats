@@ -642,8 +642,9 @@ def run_job(job_id, jobs, lock):
                                 "innings_id": innings_id, "phase": phase,
                                 "team": batting_team, "opponent": bowling_team,
                                 "player": player, "runs": x["runs"], "balls": x["balls"],
-                                "ones": x["ones"], "twos": x["twos"], "threes": x["threes"],
-                                "fours": x["fours"], "sixes": x["sixes"],
+                                "zeros": x.get("zeros", 0), "ones": x.get("ones", 0),
+                                "twos": x.get("twos", 0), "threes": x.get("threes", 0),
+                                "fours": x.get("fours", 0), "sixes": x.get("sixes", 0),
                                 "dismissed": x.get("dismissed", False)
                             })
                     for phase, players in inn.get("phase_bowling", {}).items():
