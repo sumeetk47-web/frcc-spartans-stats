@@ -255,7 +255,7 @@ def over_phase(over_no):
         return "7-16"
     if 17 <= over_no <= 20:
         return "17-20"
-    return "Other"
+    return None
 
 def parse_ballfeed(data):
     """Reconstruct full innings from CricClubs getBallByBall.
@@ -440,16 +440,17 @@ def parse_ballfeed(data):
                         elif runs == 6:
                             s["sixes"] += 1
 
-                # Phase batting figures are intentionally delivery-derived.
-                ps = phase_batting[phase][striker]
-                if not kind["wide"]:
-                    ps["balls"] += 1
-                    if not kind["bye"]:
-                        ps["runs"] += runs
-                        if runs == 4:
-                            ps["fours"] += 1
-                        elif runs == 6:
-                            ps["sixes"] += 1
+                # Phase batting figures are only assigned to the three valid T20 phases.
+                if phase is not None:
+                    ps = phase_batting[phase][striker]
+                    if not kind["wide"]:
+                        ps["balls"] += 1
+                        if not kind["bye"]:
+                            ps["runs"] += runs
+                            if runs == 4:
+                                ps["fours"] += 1
+                            elif runs == 6:
+                                ps["sixes"] += 1
 
                 if kind["wicket"]:
                     ps["dismissed"] = True
