@@ -635,14 +635,14 @@ def run_job(job_id, jobs, lock):
                     innings_id = f"{mid}:{inn.get('innings_label', '')}"
                     for phase, players in inn.get("phase_batting", {}).items():
                         for player, x in players.items():
-                            if not any(x.get(k, 0) for k in ("runs", "balls", "zeros", "ones", "twos", "threes", "fours", "sixes")) and not x.get("dismissed"):
+                            if not any(x.get(k, 0) for k in ("runs", "balls", "fours", "sixes")) and not x.get("dismissed"):
                                 continue
                             phase_batting_rows.append({
                                 "match_id": mid, "date": dt, "ground": ground,
                                 "innings_id": innings_id, "phase": phase,
                                 "team": batting_team, "opponent": bowling_team,
                                 "player": player, "runs": x["runs"], "balls": x["balls"],
-                                "zeros": x.get("zeros", 0), "ones": x["ones"], "twos": x["twos"], "threes": x["threes"],
+                                "ones": x["ones"], "twos": x["twos"], "threes": x["threes"],
                                 "fours": x["fours"], "sixes": x["sixes"],
                                 "dismissed": x.get("dismissed", False)
                             })
