@@ -1,4 +1,4 @@
-let result=null, timer=null, active="summary", selectedTeam="", selectedPlayers=new Set(), sortKey="", sortDir="desc";
+let result=null, timer=null, active="summary", selectedTeam="", selectedPlayers=new Set(), phaseFilter="all", sortKey="", sortDir="desc";
 let sortInitialized=false;
 const $=id=>document.getElementById(id);
 $("run").onclick=async()=>{
@@ -12,24 +12,34 @@ async function poll(id){
   if(j.status==="done"){
     clearInterval(timer); result=await (await fetch("/api/jobs/"+id+"/result")).json();
     $("content").classList.remove("hidden"); $("download").classList.remove("hidden");
-    $("download").href="/api/jobs/"+id+"/excel"; selectedTeam=""; selectedPlayers=new Set(); sortKey=""; render(); $("run").disabled=false;
+    $("download").href="/api/jobs/"+id+"/excel"; selectedTeam=""; selectedPlayers=new Set(); phaseFilter="all"; sortKey=""; render(); $("run").disabled=false;
   }
   if(j.status==="error"){clearInterval(timer);$("status").innerHTML='<span class="err">'+esc(j.message)+'</span>';$("run").disabled=false;}
 }
 document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{active=b.dataset.tab; sortKey=""; render()});
 $("teamFilter").onchange=()=>{selectedTeam=$("teamFilter").value; selectedPlayers=new Set([...selectedPlayers].filter(p=>availablePlayers().includes(p))); updatePlayerFilter(); render()};
 $("playerFilter").onchange=()=>{selectedPlayers=new Set([...$("playerFilter").selectedOptions].map(o=>o.value)); render()};
+$("phaseFilter").onchange=()=>{phaseFilter=$("phaseFilter").value; sortKey=""; render()};
 $("sortKey").onchange=()=>{sortKey=$("sortKey").value; render()};
 $("sortDir").onchange=()=>{sortDir=$("sortDir").value; render()};
 function esc(x){return String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
-function currentDataKey(){return ({bat:"ground_batting",bowl:"ground_bowling",obat:"overall_batting",obowl:"overall_bowling"})[active]||null}
+function baseDataKey(){return ({bat:"ground_batting",bowl:"ground_bowling",obat:"overall_batting",obowl:"overall_bowling"})[active]||null}
+function currentDataKey(){
+  const base=baseDataKey();
+  if(!base) return null;
+  if(phaseFilter!=="all") return ({
+    ground_batting:"phase_ground_batting", ground_bowling:"phase_ground_bowling",
+    overall_batting:"phase_overall_batting", overall_bowling:"phase_overall_bowling"
+  })[base];
+  return base;
+}
 function filterable(){return !!currentDataKey()}
 function availablePlayers(){
-  const keys=["ground_batting","ground_bowling","overall_batting","overall_bowling"];
-  return [...new Set(keys.flatMap(k=>(result[k]||[])).filter(r=>!selectedTeam||r.team===selectedTeam).map(r=>r.player).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const key=currentDataKey();
+  return [...new Set((result[key]||[]).filter(r=>!selectedTeam||r.team===selectedTeam).map(r=>r.player).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
 }
 function updateTeamFilter(){
-  const keys=["ground_batting","ground_bowling","overall_batting","overall_bowling"];
+  const keys=[currentDataKey()].filter(Boolean);
   const teams=[...new Set(keys.flatMap(k=>(result[k]||[])).map(r=>r.team).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   const el=$("teamFilter"); const old=selectedTeam;
   el.innerHTML='<option value="">All teams</option>'+teams.map(t=>'<option value="'+esc(t)+'">'+esc(t)+"</option>").join("");
@@ -64,9 +74,12 @@ function sortOptions(rows){
 function render(){
   if(!result)return;
   const map={summary:["ground_summary","Ground Summary"],bat:["ground_batting","Ground Batting"],bowl:["ground_bowling","Ground Bowling"],obat:["overall_batting","Overall Batting"],obowl:["overall_bowling","Overall Bowling"],matches:["matches","Matches"]};
-  const [key,title]=map[active];
+  const [baseKey,title]=map[active];
+  const key=currentDataKey()||baseKey;
   const f=filterable(); $("filters").classList.toggle("hidden",!f); $("sortControls").classList.toggle("hidden",!f);
   updateTeamFilter(); updatePlayerFilter();
+  $("phaseControl").classList.toggle("hidden",!f);
+  $("phaseFilter").value=phaseFilter;
   let rows=filteredRows(key);
   if(f){
     const opts=sortOptions(rows); const preferred=(active==="bat"||active==="obat")?"runs":"wickets";
