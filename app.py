@@ -94,7 +94,9 @@ def create_job(request: Request, background_tasks: BackgroundTasks):
         jobs[job_id] = {"status": "queued", "progress": 0, "message": "Queued"}
         in_progress_job = job_id
 
-    if cache_ready():
+    force_refresh = request.query_params.get("refresh", "0").lower() in {"1", "true", "yes"}
+
+    if cache_ready() and not force_refresh:
         copy_cache_to_job(job_id)
         with lock:
             jobs[job_id] = {

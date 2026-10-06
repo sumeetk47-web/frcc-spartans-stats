@@ -80,11 +80,26 @@ SESSION.headers.update({
 
 def api_get(path):
     url = urljoin(API_BASE + "/", path.lstrip("/"))
-    headers = dict(SESSION.headers)
-    headers["x-content-token"] = content_token()
-    r = SESSION.get(url, headers=headers, timeout=25)
-    r.raise_for_status()
-    return r.json()
+    last_error = None
+    for attempt in range(3):
+        try:
+            headers = dict(SESSION.headers)
+            headers["x-content-token"] = content_token()
+            r = SESSION.get(url, headers=headers, timeout=30)
+            if r.status_code in (401, 403, 429, 500, 502, 503, 504):
+                last_error = RuntimeError(f"CricClubs API HTTP {r.status_code}: {r.text[:300]}")
+                time.sleep(0.8 * (attempt + 1))
+                continue
+            r.raise_for_status()
+            try:
+                return r.json()
+            except ValueError as exc:
+                raise RuntimeError(f"CricClubs returned non-JSON data (HTTP {r.status_code}): {r.text[:300]}") from exc
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(0.8 * (attempt + 1))
+    raise RuntimeError(f"CricClubs API request failed: {last_error}")
 
 def recursive_objects(x):
     if isinstance(x, dict):
@@ -103,6 +118,15 @@ def first_value(obj, keys, default=None):
                 return v
     return default
 
+def direct_value(obj, keys, default=None):
+    if not isinstance(obj, dict):
+        return default
+    wanted = {k.lower() for k in keys}
+    for k, v in obj.items():
+        if str(k).lower() in wanted and v not in (None, ""):
+            return v
+    return default
+
 def norm(s):
     return re.sub(r"[^a-z0-9]", "", str(s).lower())
 
@@ -114,30 +138,47 @@ def get_schedule():
     return api_get(f"/match/getSchedule?v={APP_VERSION}&clubId={CLUB_ID}&seriesId={SERIES_ID}&limit=200")
 
 def extract_matches(schedule):
+    """Extract fixture/match records without confusing nested IDs.
+
+    CricClubs has returned schedule payloads with slightly different nesting
+    over time. We inspect each dictionary that itself contains match/fixture
+    identifiers, instead of recursively taking the first ID from a child
+    object. This is important for the 2026 schedule.
+    """
     candidates = []
+    team_tokens = {norm(TEAM_NAME), str(TEAM_ID)}
     for d in recursive_objects(schedule):
-        # Accept objects that look like fixtures/matches.
-        mid = first_value(d, ["matchId", "matchID", "id"])
-        fid = first_value(d, ["fixtureId", "fixtureID", "scheduleId"])
-        if mid is None and fid is None:
+        if not isinstance(d, dict):
             continue
-        blob = norm(d)
-        if norm(TEAM_NAME) not in blob and str(TEAM_ID) not in blob:
+        mid = direct_value(d, ["matchId", "matchID", "match_id"])
+        fid = direct_value(d, ["fixtureId", "fixtureID", "fixture_id", "scheduleId", "scheduleID"])
+        # Some payloads use a generic id; only accept it when the object also
+        # looks like a match/fixture record.
+        generic_id = direct_value(d, ["id"])
+        if mid in (None, "", 0, "0") and fid in (None, "", 0, "0"):
+            if generic_id in (None, ""):
+                continue
+            keys = {str(k).lower() for k in d.keys()}
+            if not ({"team1", "team2", "matchdate", "fixturedate", "scheduleddate", "matchstatus", "status"} & keys):
+                continue
+            fid = generic_id
+        blob = norm(json.dumps(d, ensure_ascii=False))
+        if not any(tok and tok in blob for tok in team_tokens):
             continue
-        date = first_value(d, ["matchDate", "date", "startDate", "scheduledDate", "matchStartDate"])
-        year = None
-        if date:
-            m = re.search(r"(20\d{2})", str(date))
-            year = int(m.group(1)) if m else None
-        if year and year != SEASON:
+        date = direct_value(d, ["matchDate", "date", "startDate", "scheduledDate", "matchStartDate", "fixtureDate"])
+        if date is None:
+            date = first_value(d, ["matchDate", "date", "startDate", "scheduledDate", "matchStartDate", "fixtureDate"])
+        years = re.findall(r"20\d{2}", str(date or ""))
+        if years and SEASON not in {int(y) for y in years}:
             continue
         candidates.append(d)
 
-    # Deduplicate by fixture/match id.
     out, seen = [], set()
     for d in candidates:
-        key = str(first_value(d, ["fixtureId","fixtureID","matchId","matchID","id"]))
-        if key not in seen:
+        mid = direct_value(d, ["matchId", "matchID", "match_id"])
+        fid = direct_value(d, ["fixtureId", "fixtureID", "fixture_id", "scheduleId", "scheduleID", "id"])
+        key = str(mid or fid)
+        if key and key not in seen:
             seen.add(key)
             out.append(d)
     return out
@@ -149,7 +190,13 @@ def get_balls(match_id):
     return api_get(f"/scoreCard/getBallByBall?v={APP_VERSION}&clubId={CLUB_ID}&matchId={match_id}")
 
 def identify_match_id(fixture):
-    return first_value(fixture, ["matchId", "matchID", "id"])
+    # A scheduled fixture may expose matchId=0 while the stable fixture id is
+    # present. Historical 2026 matches should have a real matchId.
+    mid = direct_value(fixture, ["matchId", "matchID", "match_id"])
+    if mid not in (None, "", 0, "0"):
+        return mid
+    # Do not mistake a nested team's player id for a match id.
+    return direct_value(fixture, ["fixtureMatchId", "fixtureMatchID"])
 
 def ground_from(summary, fixture):
     return first_value(summary, ["groundName","ground","venueName","venue","location","groundname"]) \
@@ -532,13 +579,13 @@ def run_job(job_id, jobs, lock):
     try:
         update("running", 3, "Fetching 2026 schedule…")
         schedule = get_schedule()
+        (outdir/"raw_schedule.json").write_text(json.dumps(schedule, indent=2, ensure_ascii=False), encoding="utf-8")
         fixtures = extract_matches(schedule)
         if not fixtures:
             raise RuntimeError(
-                "No FRCC-Spartans fixtures were found in the API response. "
-                "If CricClubs changed its schedule schema, inspect data/raw_schedule.json."
+                f"No FRCC-Spartans {SEASON} fixtures were found in the CricClubs schedule response. "
+                "The raw API response was saved to data/<job_id>/raw_schedule.json."
             )
-        (outdir/"raw_schedule.json").write_text(json.dumps(schedule, indent=2, ensure_ascii=False), encoding="utf-8")
 
         matches = []
         batting_rows = []
