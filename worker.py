@@ -286,13 +286,13 @@ def parse_ballfeed(data):
             continue
 
         batting = defaultdict(lambda: {
-            "runs": 0, "balls": 0, "ones": 0, "twos": 0, "threes": 0, "fours": 0, "sixes": 0,
+            "runs": 0, "balls": 0, "zeros": 0, "ones": 0, "twos": 0, "threes": 0, "fours": 0, "sixes": 0,
             "dismissed": False, "how_out": ""
         })
         # Phase figures are delivery-derived because CricClubs' summary does
         # not expose batting/bowling splits by over phase.
         phase_batting = defaultdict(lambda: defaultdict(lambda: {
-            "runs": 0, "balls": 0, "ones": 0, "twos": 0, "threes": 0, "fours": 0, "sixes": 0, "dismissed": False
+            "runs": 0, "balls": 0, "zeros": 0, "ones": 0, "twos": 0, "threes": 0, "fours": 0, "sixes": 0, "dismissed": False
         }))
         phase_bowling = defaultdict(lambda: defaultdict(lambda: {
             "balls": 0, "maidens": 0, "runs": 0, "wickets": 0
@@ -443,6 +443,10 @@ def parse_ballfeed(data):
                     s["balls"] += 1
                     if not kind["bye"]:
                         s["runs"] += runs
+                        # 0s = legal balls with no runs off the bat. A no-ball
+                        # is not a ball faced, so it is not a dot ball.
+                        if runs == 0 and not kind["nb"]:
+                            s["zeros"] += 1
                         # Boundary counts must use batter runs specifically.
                         if runs == 1:
                             s["ones"] += 1
@@ -462,6 +466,8 @@ def parse_ballfeed(data):
                         ps["balls"] += 1
                         if not kind["bye"]:
                             ps["runs"] += runs
+                            if runs == 0 and not kind["nb"]:
+                                ps["zeros"] += 1
                             if runs == 1:
                                 ps["ones"] += 1
                             elif runs == 2:
@@ -608,7 +614,7 @@ def run_job(job_id, jobs, lock):
                             "match_id":mid,"date":dt,"ground":ground,
                             "team":batting_team,"opponent":bowling_team,
                             "player":player,"runs":x["runs"],"balls":x["balls"],
-                            "ones":x["ones"],"twos":x["twos"],"threes":x["threes"],
+                            "zeros":x["zeros"],"ones":x["ones"],"twos":x["twos"],"threes":x["threes"],
                             "fours":x["fours"],"sixes":x["sixes"],"strike_rate":sr,
                             "dismissed":x["dismissed"]
                         })
@@ -660,14 +666,14 @@ def run_job(job_id, jobs, lock):
         mat = pd.DataFrame(matches)
 
         if bat.empty:
-            bat = pd.DataFrame(columns=["team","ground","player","matches","innings","runs","balls","ones","twos","threes","fours","sixes","strike_rate","average","highest_score"])
+            bat = pd.DataFrame(columns=["team","ground","player","matches","innings","runs","balls","zeros","ones","twos","threes","fours","sixes","strike_rate","average","highest_score"])
             bat_inn = bat.copy()
         else:
             bat["out"] = bat["dismissed"].astype(bool)
             bat["not_out"] = ~bat["out"]
             bat_inn = bat.groupby(["team","ground","player"], as_index=False).agg(
                 matches=("match_id","nunique"), innings=("match_id","size"),
-                runs=("runs","sum"), balls=("balls","sum"),
+                runs=("runs","sum"), balls=("balls","sum"), zeros=("zeros","sum"),
                 ones=("ones","sum"), twos=("twos","sum"), threes=("threes","sum"),
                 fours=("fours","sum"), sixes=("sixes","sum"),
                 dismissals=("out","sum"), highest_score=("runs","max"))
@@ -700,7 +706,7 @@ def run_job(job_id, jobs, lock):
         else:
             overall_bat = bat.groupby(["team","player"], as_index=False).agg(
                 matches=("match_id","nunique"), innings=("match_id","size"),
-                runs=("runs","sum"), balls=("balls","sum"),
+                runs=("runs","sum"), balls=("balls","sum"), zeros=("zeros","sum"),
                 ones=("ones","sum"), twos=("twos","sum"), threes=("threes","sum"),
                 fours=("fours","sum"), sixes=("sixes","sum"),
                 dismissals=("out","sum"), highest_score=("runs","max"))
@@ -727,13 +733,13 @@ def run_job(job_id, jobs, lock):
         phase_order = ["1-6", "7-16", "17-20"]
         pbat = pd.DataFrame(phase_batting_rows)
         if pbat.empty:
-            phase_bat_ground = pd.DataFrame(columns=["team","ground","phase","player","matches","innings","runs","balls","ones","twos","threes","fours","sixes","strike_rate","average","highest_score"])
+            phase_bat_ground = pd.DataFrame(columns=["team","ground","phase","player","matches","innings","runs","balls","zeros","ones","twos","threes","fours","sixes","strike_rate","average","highest_score"])
             phase_bat_overall = phase_bat_ground.copy()
         else:
             pbat["out"] = pbat["dismissed"].astype(bool)
             phase_bat_ground = pbat.groupby(["team","ground","phase","player"], as_index=False).agg(
                 matches=("match_id","nunique"), innings=("innings_id","nunique"),
-                runs=("runs","sum"), balls=("balls","sum"), ones=("ones","sum"),
+                runs=("runs","sum"), balls=("balls","sum"), zeros=("zeros","sum"), ones=("ones","sum"),
                 twos=("twos","sum"), threes=("threes","sum"), fours=("fours","sum"),
                 sixes=("sixes","sum"), dismissals=("out","sum"), highest_score=("runs","max"))
             phase_bat_ground["strike_rate"] = (100*phase_bat_ground["runs"]/phase_bat_ground["balls"]).round(2)
@@ -741,7 +747,7 @@ def run_job(job_id, jobs, lock):
             phase_bat_ground.drop(columns=["dismissals"], inplace=True)
             phase_bat_overall = pbat.groupby(["team","phase","player"], as_index=False).agg(
                 matches=("match_id","nunique"), innings=("innings_id","nunique"),
-                runs=("runs","sum"), balls=("balls","sum"), ones=("ones","sum"),
+                runs=("runs","sum"), balls=("balls","sum"), zeros=("zeros","sum"), ones=("ones","sum"),
                 twos=("twos","sum"), threes=("threes","sum"), fours=("fours","sum"),
                 sixes=("sixes","sum"), dismissals=("out","sum"), highest_score=("runs","max"))
             phase_bat_overall["strike_rate"] = (100*phase_bat_overall["runs"]/phase_bat_overall["balls"]).round(2)
