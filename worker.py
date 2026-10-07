@@ -371,6 +371,7 @@ def parse_ballfeed(data):
         batting_order = []
         bowling = {}
         previous_bowling_totals = {}
+        matchup = defaultdict(lambda: {"balls":0,"runs":0,"fours":0,"sixes":0,"dismissals":0,"bowler_wickets":0})
 
         def batter(name):
             if not name:
@@ -391,7 +392,7 @@ def parse_ballfeed(data):
                 "wicket": bool(re.search(r"W", rd.replace("wd", ""), re.I)),
             }
 
-        def apply_out_commentary(b):
+        def apply_out_commentary(b, current_bowler=None):
             commentary = str(b.get("commentary", "") or "")
             # CricClubs uses HTML commentary such as:
             # <strong>Player c Fielder b Bowler 8</strong>
@@ -423,6 +424,8 @@ def parse_ballfeed(data):
                 x = batter(matched)
                 x["dismissed"] = True
                 x["how_out"] = " ".join(words[len(matched.split()):]).strip() or "out"
+                x["dismissed_by"] = str(current_bowler or "").strip()
+                x["bowler_wicket"] = not bool(re.search(r"run\s*out|retired|obstruct", x["how_out"], re.I))
                 if runs is not None:
                     x["runs"] = runs
                 x["balls"] = parse_int(m.group(2))
@@ -530,6 +533,18 @@ def parse_ballfeed(data):
                         elif runs == 6:
                             s["sixes"] += 1
 
+                # Batter-vs-bowler matchup data is delivery-level. Wides do not
+                # count as balls faced; bowler wickets are credited only when the
+                # dismissal is attributable to the bowler (not run out/retired).
+                if bowler_name and not kind["wide"]:
+                    mk = (striker, str(bowler_name).strip())
+                    mx = matchup[mk]
+                    mx["balls"] += 1
+                    if not kind["bye"]:
+                        mx["runs"] += runs
+                        if runs == 4: mx["fours"] += 1
+                        elif runs == 6: mx["sixes"] += 1
+
                 # Phase batting figures are only assigned to the three valid T20 phases.
                 if phase is not None:
                     ps = phase_batting[phase][striker]
@@ -552,7 +567,12 @@ def parse_ballfeed(data):
 
                 if kind["wicket"]:
                     ps["dismissed"] = True
-                    apply_out_commentary(b)
+                    dismissed_name = apply_out_commentary(b, bowler_name)
+                    if dismissed_name and bowler_name:
+                        mk = (dismissed_name, str(bowler_name).strip())
+                        matchup[mk]["dismissals"] += 1
+                        if batting.get(dismissed_name, {}).get("bowler_wicket"):
+                            matchup[mk]["bowler_wickets"] += 1
 
             # Each OverN bowling snapshot is cumulative for that bowler.
             if bowler_name and bowler_snapshot is not None:
@@ -584,6 +604,7 @@ def parse_ballfeed(data):
             "bowling": bowling,
             "phase_batting": {phase: dict(players) for phase, players in phase_batting.items()},
             "phase_bowling": {phase: dict(players) for phase, players in phase_bowling.items()},
+            "matchup": {f"{a}|||{b}": dict(v) for (a,b),v in matchup.items()},
             "raw": inn,
         })
     return results
@@ -618,6 +639,7 @@ def run_job(job_id, jobs, lock):
         phase_bowling_rows = []
         errors = []
         data_quality_rows = []
+        matchup_rows = []
 
         for i, fixture in enumerate(fixtures, 1):
             mid = identify_match_id(fixture)
@@ -730,6 +752,22 @@ def run_job(job_id, jobs, lock):
                                 "maidens": x["maidens"], "runs_conceded": x["runs"],
                                 "wickets": x["wickets"]
                             })
+                    for key, mx in inn.get("matchup", {}).items():
+                        try:
+                            batter_name, bowler_name = key.split("|||", 1)
+                        except ValueError:
+                            continue
+                        balls_faced = int(mx.get("balls", 0) or 0)
+                        matchup_rows.append({
+                            "match_id": mid, "date": dt, "ground": ground,
+                            "team": batting_team, "opponent": bowling_team,
+                            "batter": batter_name, "bowler": bowler_name,
+                            "balls": balls_faced, "runs": int(mx.get("runs",0) or 0),
+                            "fours": int(mx.get("fours",0) or 0), "sixes": int(mx.get("sixes",0) or 0),
+                            "dismissals": int(mx.get("dismissals",0) or 0),
+                            "bowler_wickets": int(mx.get("bowler_wickets",0) or 0),
+                            "strike_rate": round(100*int(mx.get("runs",0) or 0)/balls_faced,2) if balls_faced else 0
+                        })
             except Exception as e:
                 errors.append({"match_id":mid, "error":str(e)})
 
@@ -852,11 +890,20 @@ def run_job(job_id, jobs, lock):
 
         ground_summary = mat.groupby("ground", as_index=False).agg(
             matches=("match_id","nunique"))
+        matchup_df = pd.DataFrame(matchup_rows)
+        if matchup_df.empty:
+            matchup_df = pd.DataFrame(columns=["match_id","date","ground","team","opponent","batter","bowler","balls","runs","fours","sixes","dismissals","bowler_wickets","strike_rate"])
+        # Match-level rows power the recent-form dashboard without losing innings detail.
+        player_batting_match = bat[["match_id","date","ground","team","opponent","player","runs","balls","zeros","ones","twos","threes","fours","sixes","strike_rate","dismissed"]].copy() if not bat.empty else pd.DataFrame()
+        player_bowling_match = bowl[["match_id","date","ground","team","opponent","player","balls","overs","maidens","runs_conceded","wickets","economy"]].copy() if not bowl.empty else pd.DataFrame()
         result = {
             "config":{"club_id":CLUB_ID,"series_id":SERIES_ID,"team_id":TEAM_ID,
                       "team":TEAM_NAME,"season":SEASON,"format":"Twenty20"},
             "matches":mat.fillna("").to_dict("records"),
             "ground_summary":ground_summary.fillna("").to_dict("records"),
+            "matchups":matchup_df.fillna("").to_dict("records"),
+            "player_batting_match":player_batting_match.fillna("").to_dict("records"),
+            "player_bowling_match":player_bowling_match.fillna("").to_dict("records"),
             "ground_batting":bat_inn.fillna("").to_dict("records"),
             "ground_bowling":bowl_inn.fillna("").to_dict("records"),
             "overall_batting":overall_bat.fillna("").to_dict("records"),
@@ -876,6 +923,9 @@ def run_job(job_id, jobs, lock):
         with pd.ExcelWriter(xlsx, engine="openpyxl") as w:
             mat.to_excel(w, "Matches", index=False)
             ground_summary.to_excel(w, "Ground Summary", index=False)
+            matchup_df.to_excel(w, "Player Matchups", index=False)
+            player_batting_match.to_excel(w, "Batting by Match", index=False)
+            player_bowling_match.to_excel(w, "Bowling by Match", index=False)
             bat_inn.to_excel(w, "Ground Batting", index=False)
             bowl_inn.to_excel(w, "Ground Bowling", index=False)
             overall_bat.to_excel(w, "Overall Batting", index=False)
