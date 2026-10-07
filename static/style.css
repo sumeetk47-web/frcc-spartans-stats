@@ -19,6 +19,6 @@ select[multiple] { min-width: 240px; min-height: 120px; }
   white-space: nowrap;
 }
 .shot-stat .shot-count {
-  font-weight: 700;
+  font-weight:400!important;
 }
 .shot-stat .shot-pct{font-size:10px!important;line-height:1;margin-top:2px;opacity:.62;font-weight:700}
