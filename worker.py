@@ -761,6 +761,7 @@ def run_job(job_id, jobs, lock):
                         matchup_rows.append({
                             "match_id": mid, "date": dt, "ground": ground,
                             "team": batting_team, "opponent": bowling_team,
+                            "batter_team": batting_team, "bowler_team": bowling_team,
                             "batter": batter_name, "bowler": bowler_name,
                             "balls": balls_faced, "runs": int(mx.get("runs",0) or 0),
                             "fours": int(mx.get("fours",0) or 0), "sixes": int(mx.get("sixes",0) or 0),
@@ -892,7 +893,7 @@ def run_job(job_id, jobs, lock):
             matches=("match_id","nunique"))
         matchup_df = pd.DataFrame(matchup_rows)
         if matchup_df.empty:
-            matchup_df = pd.DataFrame(columns=["match_id","date","ground","team","opponent","batter","bowler","balls","runs","fours","sixes","dismissals","bowler_wickets","strike_rate"])
+            matchup_df = pd.DataFrame(columns=["match_id","date","ground","team","opponent","batter_team","bowler_team","batter","bowler","balls","runs","fours","sixes","dismissals","bowler_wickets","strike_rate"])
         # Match-level rows power the recent-form dashboard without losing innings detail.
         player_batting_match = bat[["match_id","date","ground","team","opponent","player","runs","balls","zeros","ones","twos","threes","fours","sixes","strike_rate","dismissed"]].copy() if not bat.empty else pd.DataFrame()
         player_bowling_match = bowl[["match_id","date","ground","team","opponent","player","balls","overs","maidens","runs_conceded","wickets","economy"]].copy() if not bowl.empty else pd.DataFrame()
