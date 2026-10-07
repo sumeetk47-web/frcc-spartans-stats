@@ -21,4 +21,4 @@ select[multiple] { min-width: 240px; min-height: 120px; }
 .shot-stat .shot-count {
   font-weight:400!important;
 }
-.shot-stat .shot-pct{font-size:10px!important;line-height:1;margin-top:2px;opacity:.62;font-weight:700}
+.shot-stat .shot-pct{font-size:10px!important;line-height:1;margin-top:2px;opacity:1!important;font-weight:700!important;color:#111!important}
