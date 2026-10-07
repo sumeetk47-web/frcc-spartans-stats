@@ -26,6 +26,8 @@
       <button data-tab="obat">Overall Batting</button>
       <button data-tab="obowl">Overall Bowling</button>
       <button data-tab="matches">Matches</button>
+      <button data-tab="player">Player Dashboard</button>
+      <button data-tab="matchups">Matchups & Tips</button>
     </div>
     <div id="filters" class="filters hidden">
       <label>Team
@@ -56,6 +58,15 @@
           <option value="asc">Ascending</option>
         </select>
       </label>
+    </div>
+
+    <div id="analysisPanel" class="analysis-panel hidden">
+      <div class="analysis-controls">
+        <label>Team<select id="analysisTeam"></select></label>
+        <label>Player<select id="analysisPlayer"></select></label>
+        <label id="analysisOpponentWrap">Opponent<select id="analysisOpponent"></select></label>
+      </div>
+      <div id="analysisContent"></div>
     </div>
     <div id="table"></div>
   </div>
