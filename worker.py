@@ -135,7 +135,35 @@ def team_in_text(obj):
     return target in norm(json.dumps(obj, ensure_ascii=False))
 
 def get_schedule():
-    return api_get(f"/match/getSchedule?v={APP_VERSION}&clubId={CLUB_ID}&seriesId={SERIES_ID}&limit=200")
+    """Fetch the complete series schedule, not just the FRCC-Spartans fixtures.
+
+    The UI supports filtering by any team, so restricting the schedule here to
+    TEAM_NAME causes opponents such as RCC Eagles to show only matches played
+    against FRCC-Spartans. We page through the series and merge the responses.
+    """
+    pages = []
+    merged = {"pages": pages}
+    previous_count = 0
+    page_size = 200
+    max_pages = 20
+    for page_no in range(max_pages):
+        offset = page_no * page_size
+        payload = api_get(
+            f"/match/getSchedule?v={APP_VERSION}&clubId={CLUB_ID}&seriesId={SERIES_ID}"
+            f"&limit={page_size}&offset={offset}"
+        )
+        pages.append(payload)
+        current_count = len(extract_matches(merged))
+        if current_count <= previous_count:
+            break
+        previous_count = current_count
+        # A short page normally means there is no next page. We deliberately
+        # keep going when the API wraps the records in a different structure.
+        page_records = extract_matches(payload)
+        if len(page_records) < page_size:
+            break
+        time.sleep(REQUEST_DELAY)
+    return merged
 
 def extract_matches(schedule):
     """Extract fixture/match records without confusing nested IDs.
@@ -146,7 +174,6 @@ def extract_matches(schedule):
     object. This is important for the 2026 schedule.
     """
     candidates = []
-    team_tokens = {norm(TEAM_NAME), str(TEAM_ID)}
     for d in recursive_objects(schedule):
         if not isinstance(d, dict):
             continue
@@ -162,9 +189,6 @@ def extract_matches(schedule):
             if not ({"team1", "team2", "matchdate", "fixturedate", "scheduleddate", "matchstatus", "status"} & keys):
                 continue
             fid = generic_id
-        blob = norm(json.dumps(d, ensure_ascii=False))
-        if not any(tok and tok in blob for tok in team_tokens):
-            continue
         date = direct_value(d, ["matchDate", "date", "startDate", "scheduledDate", "matchStartDate", "fixtureDate"])
         if date is None:
             date = first_value(d, ["matchDate", "date", "startDate", "scheduledDate", "matchStartDate", "fixtureDate"])
@@ -583,7 +607,7 @@ def run_job(job_id, jobs, lock):
         fixtures = extract_matches(schedule)
         if not fixtures:
             raise RuntimeError(
-                f"No FRCC-Spartans {SEASON} fixtures were found in the CricClubs schedule response. "
+                f"No {SEASON} fixtures were found in the CricClubs series schedule response. "
                 "The raw API response was saved to data/<job_id>/raw_schedule.json."
             )
 
