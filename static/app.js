@@ -66,9 +66,44 @@ if(bowl&&Number(bowl.economy||0)>9)tips.push(['bad','Bowling economy is '+bowl.e
 html+='<div class="analysis-section"><h3>Improvement Analyzer</h3>'+ (tips.length?tips.map(t=>'<div class="tip '+t[0]+'">'+esc(t[1])+'</div>').join(''):'<div class="tip">Not enough data yet for a specific improvement recommendation.</div>')+'</div>';
 html+='<div class="analysis-section"><h3>Recent batting</h3>';if(bm.length){html+='<table class="analysis-table"><tr><th>Date</th><th>Opponent</th><th>Runs</th><th>Balls</th><th>SR</th></tr>'+bm.slice(0,10).map(r=>'<tr><td>'+esc(r.date)+'</td><td>'+esc(r.opponent)+'</td><td>'+esc(r.runs)+'</td><td>'+esc(r.balls)+'</td><td>'+esc(r.strike_rate)+'</td></tr>').join('')+'</table>'}else html+='<span class="muted">No batting innings found.</span>';html+='</div>';
 $("analysisContent").innerHTML=html}
-function matchupDashboard(){analysisOptions();const player=$("analysisPlayer").value,team=$("analysisTeam").value,opp=$("analysisOpponent").value;const allRows=(result.matchups||[]);const asBatter=allRows.filter(r=>r.batter===player&&(!team||r.batter_team===team)&&(!opp||r.bowler_team===opp));const asBowler=allRows.filter(r=>r.bowler===player&&(!team||r.bowler_team===team)&&(!opp||r.batter_team===opp));if(!player){$("analysisContent").innerHTML='<div class="analysis-section">Select a player to see matchup intelligence.</div>';return}const againstBowlers=aggregateMatchups(asBatter,'bowler');const againstBatters=aggregateMatchups(asBowler,'batter');let html='<h2 class="analysis-title">Matchup Intelligence: '+esc(player)+'</h2><p class="muted">Use a minimum of 6 balls for batter-vs-bowler recommendations.</p>';
-function table(title,items,mode){let a=items.filter(x=>x.balls>=6);if(!a.length)a=items;let topRuns=[...a].sort((x,y)=>y.runs-x.runs).slice(0,8);let topW=[...a].sort((x,y)=>y.wickets-x.wickets||y.dismissals-x.dismissals).slice(0,8);let h='<div class="analysis-section"><h3>'+title+'</h3><table class="analysis-table"><tr><th>'+esc(mode==='bat'?'Bowler':'Batter')+'</th><th>Balls</th><th>Runs</th><th>SR</th><th>'+esc(mode==='bat'?'Times out':'Wickets')+'</th></tr>'+topRuns.map(x=>'<tr><td>'+esc(x.name)+'</td><td>'+x.balls+'</td><td>'+x.runs+'</td><td>'+x.strike_rate+'</td><td>'+ (mode==='bat'?x.dismissals:x.wickets) +'</td></tr>').join('')+'</table>';if(topW.length)h+='<div class="tip '+(mode==='bat'?'warn':'good')+'">'+(mode==='bat'?'Most dangerous bowler by dismissals: '+esc(topW[0].name)+' ('+topW[0].dismissals+' dismissals).':'Best matchup for '+esc(player)+': '+esc(topW[0].name)+' with '+topW[0].wickets+' wickets.')+'</div>';return h+'</div>'}
-html+=table('Bowling matchups against '+player,againstBowlers,'bat');html+=table('Batting matchups when '+player+' bowls',againstBatters,'bowl');if(!asBatter.length&&!asBowler.length)html+='<div class="analysis-section">No ball-by-ball matchup data found for this player.</div>';$("analysisContent").innerHTML=html}
+function matchupDashboard(){
+  analysisOptions();
+  const player=$("analysisPlayer").value,team=$("analysisTeam").value,opp=$("analysisOpponent").value;
+  const allRows=(result.matchups||[]);
+  const asBatter=allRows.filter(r=>r.batter===player&&(!team||r.batter_team===team)&&(!opp||r.bowler_team===opp));
+  const asBowler=allRows.filter(r=>r.bowler===player&&(!team||r.bowler_team===team)&&(!opp||r.batter_team===opp));
+  if(!player){$("analysisContent").innerHTML='<div class="analysis-section">Select a player to see matchup intelligence.</div>';return}
+  const againstBowlers=aggregateMatchups(asBatter,'bowler');
+  const againstBatters=aggregateMatchups(asBowler,'batter');
+  let html='<h2 class="analysis-title">Matchup Intelligence: '+esc(player)+'</h2><p class="muted">Matchups use a minimum 6-ball sample when enough data is available.</p>';
+
+  function matchupTable(title,items,mode,bad){
+    let a=items.filter(x=>x.balls>=6);
+    if(!a.length)a=items;
+    if(!a.length)return '<div class="analysis-section"><h3>'+title+'</h3><div class="muted">No matchup data found.</div></div>';
+    let sorted;
+    if(mode==='bat'){
+      sorted=bad?[...a].sort((x,y)=>y.dismissals-x.dismissals||x.runs-y.runs):[...a].sort((x,y)=>y.runs-x.runs||x.dismissals-y.dismissals);
+    }else{
+      sorted=bad?[...a].sort((x,y)=>y.runs-x.runs||x.wickets-y.wickets):[...a].sort((x,y)=>y.wickets-x.wickets||x.runs-y.runs);
+    }
+    sorted=sorted.slice(0,8);
+    const heading=mode==='bat'?'Bowler':'Batter';
+    const outcome=mode==='bat'?(bad?'Times out':'Runs'):(bad?'Runs conceded':'Wickets');
+    let h='<div class="analysis-section"><h3>'+title+'</h3><table class="analysis-table"><tr><th>'+heading+'</th><th>Balls</th><th>Runs</th><th>SR</th><th>'+outcome+'</th></tr>';
+    h+=sorted.map(x=>'<tr><td>'+esc(x.name)+'</td><td>'+x.balls+'</td><td>'+x.runs+'</td><td>'+x.strike_rate+'</td><td>'+(mode==='bat'?(bad?x.dismissals:x.runs):(bad?x.runs:x.wickets))+'</td></tr>').join('');
+    return h+'</table></div>';
+  }
+
+  html+='<div class="analysis-section"><h2>Batting Matchups</h2><p class="muted">As a batter: more runs scored is better; getting out more often is worse.</p></div>';
+  html+=matchupTable('Better Matchups — Batting',againstBowlers,'bat',false);
+  html+=matchupTable('Bad Matchups — Batting',againstBowlers,'bat',true);
+  html+='<div class="analysis-section"><h2>Bowling Matchups</h2><p class="muted">As a bowler: more wickets is better; conceding more runs is worse.</p></div>';
+  html+=matchupTable('Better Matchups — Bowling',againstBatters,'bowl',false);
+  html+=matchupTable('Bad Matchups — Bowling',againstBatters,'bowl',true);
+  if(!asBatter.length&&!asBowler.length)html+='<div class="analysis-section">No ball-by-ball matchup data found for this player.</div>';
+  $("analysisContent").innerHTML=html;
+}
 function renderAnalysis(){const isA=active==='player'||active==='matchups';$("analysisPanel").classList.toggle('hidden',!isA);$("table").classList.toggle('hidden',isA);$("filters").classList.toggle('hidden',true);$("sortControls").classList.toggle('hidden',true);if(active==='player')playerDashboard();if(active==='matchups')matchupDashboard()}
 function render(){
   if(!result)return;
