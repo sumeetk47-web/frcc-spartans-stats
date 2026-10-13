@@ -2,7 +2,8 @@ let result=null, timer=null, active="summary", selectedTeam="", selectedGround="
 const $=id=>document.getElementById(id);
 $("run").onclick=async()=>{
   $("run").disabled=true; $("content").classList.add("hidden"); $("download").classList.add("hidden");
-  const r=await fetch("/api/jobs?refresh=1",{method:"POST"}); const j=await r.json();
+  const series=$("seriesSelect").value;
+  const r=await fetch("/api/jobs?refresh=1&series="+encodeURIComponent(series),{method:"POST"}); const j=await r.json();
   timer=setInterval(()=>poll(j.job_id),700); poll(j.job_id);
 };
 async function poll(id){
@@ -11,7 +12,13 @@ async function poll(id){
   if(j.status==="done"){
     clearInterval(timer); result=await (await fetch("/api/jobs/"+id+"/result")).json();
     $("content").classList.remove("hidden"); $("download").classList.remove("hidden");
-    $("download").href="/api/jobs/"+id+"/excel"; selectedTeam=""; selectedGround=""; selectedPlayers=new Set(); phaseFilter="all"; sortKey=""; render(); $("run").disabled=false;
+    $("download").href="/api/jobs/"+id+"/excel";
+    const p40=String(result.config?.format||"").toUpperCase()==="P40";
+    $("phaseFilter").innerHTML=p40
+      ? '<option value="all">All Overs</option><option value="1-8">1–8 Overs</option><option value="9-32">9–32 Overs</option><option value="33-40">33–40 Overs</option>'
+      : '<option value="all">All Overs</option><option value="1-6">1–6 Overs</option><option value="7-16">7–16 Overs</option><option value="17-20">17–20 Overs</option>';
+    document.querySelector("header p").textContent="2026 "+(p40?"Premier Series · P40":"Twenty20")+" · CricClubs · Ground-wise player statistics";
+    selectedTeam=""; selectedGround=""; selectedPlayers=new Set(); phaseFilter="all"; sortKey=""; render(); $("run").disabled=false;
   }
   if(j.status==="error"){clearInterval(timer);$("status").innerHTML='<span class="err">'+esc(j.message)+'</span>';$('run').disabled=false;}
 }
