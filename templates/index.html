@@ -2,16 +2,23 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>FRCC-Spartans 2026 T20 Stats</title>
+  <title>FRCC-Spartans 2026 Cricket Stats</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <div class="wrap">
   <header>
     <h1>FRCC-Spartans</h1>
-    <p>2026 Twenty20 · CricClubs · Ground-wise player statistics</p>
+    <p>2026 CricClubs · Ground-wise player statistics</p>
   </header>
   <section class="card">
+    <div class="series-picker">
+      <label for="seriesSelect">Competition</label>
+      <select id="seriesSelect">
+        <option value="135">2026 T20</option>
+        <option value="137">2026 Premier Series (P40)</option>
+      </select>
+    </div>
     <button id="run">Fetch 2026 Stats</button>
     <div class="progress"><div id="bar"></div></div>
     <div id="status">Ready.</div>
