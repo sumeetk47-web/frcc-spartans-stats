@@ -7,7 +7,7 @@ ground-wise, player-by-player statistics for FRCC-Spartans.
 
 - CricClubs clubId: `5135`
 - T20 series/league ID: `135`
-- Premier Series (P40) league ID: `137`
+- Premier Series Division 1 (P40) public league ID: `138`
 - Team ID: `1202`
 - Season: `2026`
 - Formats: Twenty20 and P40 (40 overs)
@@ -29,7 +29,7 @@ Open http://127.0.0.1:8000
 
 ## What it does
 
-1. Lets you select 2026 T20 (series 135) or 2026 Premier Series P40 (series 137), then calls CricClubs' schedule API for that series.
+1. Lets you select 2026 T20 (series 135) or 2026 Premier Series Division 1 P40 (public league ID 138), then calls CricClubs' schedule API for that series.
 2. Finds FRCC-Spartans fixtures in 2026.
 3. Gets each match's scorecard summary and full ball-by-ball feed.
 4. Reconstructs batting and bowling figures from the delivery data.
@@ -69,3 +69,6 @@ For 2026 Premier Series (P40), the phase selector changes to 1–8, 9–32, and 
 The schedule parser accepts multiple fixture field names used by CricClubs. If the API response still has an unrecognized structure, the app displays a **Download raw schedule JSON** link on the error message so the response can be inspected without shell access.
 \n\n### Premier Series schedule fallback\nThe fetcher tries the CricClubs schedule endpoint using `seriesId`, `leagueId`, `league`, and `series` parameter names for the selected ID. It retains each response in the raw schedule diagnostic if the API returns no fixtures.\n
 \n### CricClubs schedule API parameter\nThe core endpoint is `match/getSchedule` and uses the `seriesId` query parameter. The public league page's `league` parameter is not assumed to be the same identifier. For the Premier Series selection, the app inspects scorecard metadata for match 3666 for an explicit `seriesId` and then uses that value; the diagnostic raw schedule records the lookup and selected ID. This follows the observed CricClubs core API usage documented by the community reference at https://github.com/kosurigh/cricclubs-ticker. CricClubs does not appear to publish a complete official public API reference, so this integration is based on observed endpoint behavior.\n
+
+### Division 1 ID update
+The P40 Division 1 public league page supplied for this deployment uses `league=138` (clubId 5135). The competition selector and P40 scorecard-metadata lookup are configured to use public ID 138; the app still records and checks any internal schedule-series ID discovered from scorecard metadata.

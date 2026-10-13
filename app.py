@@ -35,10 +35,10 @@ requests_by_ip = defaultdict(deque)
 def series_config(series_id):
     configs = {
         135: {"label": "T20", "format": "Twenty20", "overs": 20},
-        137: {"label": "P40 Premier Series", "format": "P40", "overs": 40},
+        138: {"label": "P40 Premier Series Division 1", "format": "P40", "overs": 40},
     }
     if series_id not in configs:
-        raise HTTPException(400, "Unsupported series. Choose 2026 T20 or 2026 Premier Series (P40).")
+        raise HTTPException(400, "Unsupported series. Choose 2026 T20 or 2026 Premier Series Division 1 (P40).")
     return configs[series_id]
 
 
@@ -80,7 +80,7 @@ def home(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "cache_ready": cache_ready(135), "supported_series": [135, 137]}
+    return {"status": "ok", "cache_ready": cache_ready(135), "supported_series": [135, 138]}
 
 
 @app.get("/api/cache")

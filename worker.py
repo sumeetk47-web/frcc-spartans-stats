@@ -136,43 +136,90 @@ def team_in_text(obj):
     return target in norm(json.dumps(obj, ensure_ascii=False))
 
 def get_schedule(series_id=None):
-    """Fetch schedule using the common CricClubs series/league parameter variants.
+    """Resolve the internal schedule-series ID from a known P40 match, then query schedules.
 
-    Some CricClubs league pages expose a league ID that does not resolve when
-    passed as `seriesId` to the core schedule API. Try known parameter aliases
-    before declaring the schedule empty. Every response is retained for
-    diagnosis when the API returns no fixtures.
+    Public CricClubs league IDs do not always resolve as core schedule-series IDs.
+    We therefore inspect the known P40 scorecard (match 3666 by default) for series
+    metadata before querying the documented match/getSchedule endpoint. Full lookup
+    diagnostics are returned so an empty response can be diagnosed without guessing.
     """
-    series_id = series_id or SERIES_ID
+    requested_id = int(series_id or SERIES_ID)
+    seed_match_id = os.getenv("CRICCLUBS_SEED_MATCH_ID", "3666") if requested_id == 138 else os.getenv("CRICCLUBS_SEED_MATCH_ID", "")
+    seed_scorecard = None
+    discovered = {}
+    candidate_ids = []
+    if seed_match_id:
+        try:
+            seed_scorecard = get_summary(seed_match_id)
+            for key in ("seriesId", "seriesID", "series_id", "scheduleSeriesId", "scheduleSeriesID",
+                        "leagueId", "leagueID", "league_id", "tournamentId", "tournamentID"):
+                value = first_value(seed_scorecard, [key])
+                if value not in (None, ""):
+                    discovered[key] = value
+                    try:
+                        numeric = int(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if numeric not in candidate_ids:
+                        candidate_ids.append(numeric)
+        except Exception as exc:
+            seed_scorecard = {"lookupError": str(exc)}
+
+    # Prefer explicitly named series IDs, then other metadata IDs, then the public ID.
+    ordered_ids = []
+    for key in ("seriesId", "seriesID", "series_id", "scheduleSeriesId", "scheduleSeriesID",
+                "leagueId", "leagueID", "league_id", "tournamentId", "tournamentID"):
+        value = discovered.get(key)
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            continue
+        if numeric not in ordered_ids:
+            ordered_ids.append(numeric)
+    for numeric in candidate_ids + [requested_id]:
+        if numeric not in ordered_ids:
+            ordered_ids.append(numeric)
+
     page_size = 200
     max_pages = 20
     attempts = []
-    # `seriesId` is the documented parameter; aliases are fallbacks for leagues
-    # whose public league ID is exposed separately by the core API.
-    for id_param in ("seriesId", "leagueId", "league", "series"):
-        pages = []
-        previous_count = 0
-        for page_no in range(max_pages):
-            offset = page_no * page_size
-            payload = api_get(
-                f"/match/getSchedule?v={APP_VERSION}&clubId={CLUB_ID}"
-                f"&{id_param}={series_id}&limit={page_size}&offset={offset}"
-            )
-            pages.append(payload)
-            merged = {"query": {"id_param": id_param, "id": series_id}, "pages": pages}
-            current_count = len(extract_matches(merged))
-            if current_count <= previous_count:
-                break
-            previous_count = current_count
-            page_records = extract_matches(payload)
-            if len(page_records) < page_size:
-                break
-            time.sleep(REQUEST_DELAY)
-        attempts.append({"id_param": id_param, "series_id": series_id, "pages": pages})
-        if len(extract_matches({"pages": pages})):
-            return {"successful_query": {"id_param": id_param, "series_id": series_id},
-                    "attempts": attempts}
-    return {"attempts": attempts, "message": "No fixtures returned by schedule API for any supported ID parameter."}
+    for candidate_id in ordered_ids:
+        for id_param in ("seriesId", "leagueId", "league", "series"):
+            pages = []
+            previous_count = 0
+            for page_no in range(max_pages):
+                offset = page_no * page_size
+                payload = api_get(
+                    f"/match/getSchedule?v={APP_VERSION}&clubId={CLUB_ID}"
+                    f"&{id_param}={candidate_id}&limit={page_size}&offset={offset}"
+                )
+                pages.append(payload)
+                current_count = len(extract_matches({"pages": pages}))
+                if current_count <= previous_count:
+                    break
+                previous_count = current_count
+                if current_count < page_size:
+                    break
+                time.sleep(REQUEST_DELAY)
+            attempt = {"id_param": id_param, "series_id": candidate_id, "pages": pages}
+            attempts.append(attempt)
+            if len(extract_matches({"pages": pages})):
+                return {
+                    "successful_query": {"id_param": id_param, "series_id": candidate_id},
+                    "requested_public_id": requested_id,
+                    "seed_match_id": seed_match_id or None,
+                    "discovered_metadata_ids": discovered,
+                    "seed_scorecard": seed_scorecard,
+                    "attempts": attempts,
+                }
+    return {
+        "requested_public_id": requested_id,
+        "seed_match_id": seed_match_id or None,
+        "discovered_metadata_ids": discovered,
+        "seed_scorecard": seed_scorecard,
+        "attempts": attempts,
+        "message": "No fixtures returned. Inspect seed_scorecard and discovered_metadata_ids; public league ID may not be the internal schedule-series ID.",
+    }
 
 def extract_matches(schedule, season=None):
     """Extract fixture/match records without confusing nested IDs.
@@ -637,7 +684,7 @@ def run_job(job_id, jobs, lock, series_id=None, format_name=None):
     if format_name:
         FORMAT_NAME = str(format_name)
     season = SEASON
-    series_label = "P40 Premier Series" if FORMAT_NAME == "P40" else "T20"
+    series_label = "P40 Premier Series Division 1" if FORMAT_NAME == "P40" else "T20"
     outdir = Path("data") / job_id
     outdir.mkdir(parents=True, exist_ok=True)
     def update(status=None, progress=None, message=None):
