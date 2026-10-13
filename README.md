@@ -63,3 +63,7 @@ Phase figures are derived from CricClubs ball-by-ball/over data because the scor
 
 ### P40 over phases
 For 2026 Premier Series (P40), the phase selector changes to 1–8, 9–32, and 33–40 overs. T20 retains its 1–6, 7–16, and 17–20 phases. The Better/Bad Batting and Bowling Matchups and player dashboard work for whichever series is selected.
+
+
+### Premier Series schedule troubleshooting
+The schedule parser accepts multiple fixture field names used by CricClubs. If the API response still has an unrecognized structure, the app displays a **Download raw schedule JSON** link on the error message so the response can be inspected without shell access.

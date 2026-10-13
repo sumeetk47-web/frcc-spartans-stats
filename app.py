@@ -147,6 +147,14 @@ def job_status(job_id: str):
     return job
 
 
+@app.get("/api/jobs/{job_id}/raw-schedule")
+def job_raw_schedule(job_id: str):
+    p = DATA / job_id / "raw_schedule.json"
+    if not p.exists():
+        raise HTTPException(404, "Raw schedule file not found for this job")
+    return FileResponse(p, filename="raw_schedule.json", media_type="application/json")
+
+
 @app.get("/api/jobs/{job_id}/result")
 def job_result(job_id: str):
     p = DATA / job_id / "result.json"
