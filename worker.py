@@ -136,35 +136,43 @@ def team_in_text(obj):
     return target in norm(json.dumps(obj, ensure_ascii=False))
 
 def get_schedule(series_id=None):
-    """Fetch the complete series schedule, not just the FRCC-Spartans fixtures.
+    """Fetch schedule using the common CricClubs series/league parameter variants.
 
-    The UI supports filtering by any team, so restricting the schedule here to
-    TEAM_NAME causes opponents such as RCC Eagles to show only matches played
-    against FRCC-Spartans. We page through the series and merge the responses.
+    Some CricClubs league pages expose a league ID that does not resolve when
+    passed as `seriesId` to the core schedule API. Try known parameter aliases
+    before declaring the schedule empty. Every response is retained for
+    diagnosis when the API returns no fixtures.
     """
-    pages = []
-    merged = {"pages": pages}
-    previous_count = 0
+    series_id = series_id or SERIES_ID
     page_size = 200
     max_pages = 20
-    for page_no in range(max_pages):
-        offset = page_no * page_size
-        payload = api_get(
-            f"/match/getSchedule?v={APP_VERSION}&clubId={CLUB_ID}&seriesId={series_id or SERIES_ID}"
-            f"&limit={page_size}&offset={offset}"
-        )
-        pages.append(payload)
-        current_count = len(extract_matches(merged))
-        if current_count <= previous_count:
-            break
-        previous_count = current_count
-        # A short page normally means there is no next page. We deliberately
-        # keep going when the API wraps the records in a different structure.
-        page_records = extract_matches(payload)
-        if len(page_records) < page_size:
-            break
-        time.sleep(REQUEST_DELAY)
-    return merged
+    attempts = []
+    # `seriesId` is the documented parameter; aliases are fallbacks for leagues
+    # whose public league ID is exposed separately by the core API.
+    for id_param in ("seriesId", "leagueId", "league", "series"):
+        pages = []
+        previous_count = 0
+        for page_no in range(max_pages):
+            offset = page_no * page_size
+            payload = api_get(
+                f"/match/getSchedule?v={APP_VERSION}&clubId={CLUB_ID}"
+                f"&{id_param}={series_id}&limit={page_size}&offset={offset}"
+            )
+            pages.append(payload)
+            merged = {"query": {"id_param": id_param, "id": series_id}, "pages": pages}
+            current_count = len(extract_matches(merged))
+            if current_count <= previous_count:
+                break
+            previous_count = current_count
+            page_records = extract_matches(payload)
+            if len(page_records) < page_size:
+                break
+            time.sleep(REQUEST_DELAY)
+        attempts.append({"id_param": id_param, "series_id": series_id, "pages": pages})
+        if len(extract_matches({"pages": pages})):
+            return {"successful_query": {"id_param": id_param, "series_id": series_id},
+                    "attempts": attempts}
+    return {"attempts": attempts, "message": "No fixtures returned by schedule API for any supported ID parameter."}
 
 def extract_matches(schedule, season=None):
     """Extract fixture/match records without confusing nested IDs.
@@ -645,8 +653,9 @@ def run_job(job_id, jobs, lock, series_id=None, format_name=None):
         fixtures = extract_matches(schedule, season)
         if not fixtures:
             raise RuntimeError(
-                f"No {season} fixtures were found in the CricClubs series schedule response. "
-                "The raw API response was saved to data/<job_id>/raw_schedule.json."
+                f"CricClubs returned no fixtures for 2026 {series_label} using the supported series/league ID parameters. "
+                "This is an empty API schedule response, not a player-stat parser error. "
+                "The full responses were saved to raw_schedule.json for diagnosis."
             )
 
         matches = []
