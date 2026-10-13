@@ -20,7 +20,15 @@ async function poll(id){
     document.querySelector("header p").textContent="2026 "+(p40?"Premier Series · P40":"Twenty20")+" · CricClubs · Ground-wise player statistics";
     selectedTeam=""; selectedGround=""; selectedPlayers=new Set(); phaseFilter="all"; sortKey=""; render(); $("run").disabled=false;
   }
-  if(j.status==="error"){clearInterval(timer);$("status").innerHTML='<span class="err">'+esc(j.message)+'</span>';$('run').disabled=false;}
+  if(j.status==="error"){
+    clearInterval(timer);
+    const detail=esc(j.message);
+    const rawLink=j.message&&j.message.includes("raw_schedule.json")
+      ? ' <a href="/api/jobs/'+encodeURIComponent(id)+'/raw-schedule" target="_blank" rel="noopener">Download raw schedule JSON</a>'
+      : '';
+    $("status").innerHTML='<span class="err">'+detail+'</span>'+rawLink;
+    $("run").disabled=false;
+  }
 }
 document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{active=b.dataset.tab; sortKey=""; render()});
 $("teamFilter").onchange=()=>{selectedTeam=$("teamFilter").value; selectedPlayers=new Set([...selectedPlayers].filter(p=>availablePlayers().includes(p))); updatePlayerFilter(); render()};
