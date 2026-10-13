@@ -22,7 +22,7 @@ CACHE.mkdir(exist_ok=True)
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", str(6 * 60 * 60)))
 RATE_LIMIT_PER_HOUR = int(os.getenv("RATE_LIMIT_PER_HOUR", "6"))
 
-app = FastAPI(title="FRCC-Spartans 2026 T20 Stats")
+app = FastAPI(title="FRCC-Spartans 2026 T20 + P40 Stats")
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE / "templates"))
 
@@ -32,20 +32,34 @@ in_progress_job = None
 requests_by_ip = defaultdict(deque)
 
 
-def cache_ready():
-    result = CACHE / "result.json"
-    excel = CACHE / "FRCC-Spartans-2026-T20.xlsx"
+def series_config(series_id):
+    configs = {
+        135: {"label": "T20", "format": "Twenty20", "overs": 20},
+        137: {"label": "P40 Premier Series", "format": "P40", "overs": 40},
+    }
+    if series_id not in configs:
+        raise HTTPException(400, "Unsupported series. Choose 2026 T20 or 2026 Premier Series (P40).")
+    return configs[series_id]
+
+
+def cache_paths(series_id):
+    label = series_config(series_id)["label"].replace(" ", "-")
+    return CACHE / f"result_{series_id}.json", CACHE / f"FRCC-Spartans-2026-{label}.xlsx"
+
+
+def cache_ready(series_id=135):
+    result, excel = cache_paths(series_id)
     if not result.exists() or not excel.exists():
         return False
     return (time.time() - result.stat().st_mtime) < CACHE_TTL_SECONDS
 
 
-def copy_cache_to_job(job_id):
+def copy_cache_to_job(job_id, series_id=135):
     outdir = DATA / job_id
     outdir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(CACHE / "result.json", outdir / "result.json")
-    shutil.copy2(CACHE / "FRCC-Spartans-2026-T20.xlsx", outdir / "FRCC-Spartans-2026-T20.xlsx")
-
+    result, excel = cache_paths(series_id)
+    shutil.copy2(result, outdir / "result.json")
+    shutil.copy2(excel, outdir / excel.name)
 
 def client_allowed(request: Request):
     ip = request.client.host if request.client else "unknown"
@@ -66,16 +80,20 @@ def home(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "cache_ready": cache_ready()}
+    return {"status": "ok", "cache_ready": cache_ready(135), "supported_series": [135, 137]}
 
 
 @app.get("/api/cache")
-def cache_status():
-    result = CACHE / "result.json"
+def cache_status(request: Request):
+    try:
+        series_id = int(request.query_params.get("series", "135"))
+    except ValueError:
+        series_id = 135
+    result, _ = cache_paths(series_id)
     if not result.exists():
         return {"ready": False}
     age = max(0, time.time() - result.stat().st_mtime)
-    return {"ready": cache_ready(), "age_seconds": int(age), "ttl_seconds": CACHE_TTL_SECONDS}
+    return {"ready": cache_ready(series_id), "age_seconds": int(age), "ttl_seconds": CACHE_TTL_SECONDS}
 
 
 @app.post("/api/jobs")
@@ -83,30 +101,37 @@ def create_job(request: Request, background_tasks: BackgroundTasks):
     global in_progress_job
     if not client_allowed(request):
         raise HTTPException(429, "Refresh limit reached. Please wait before requesting another update.")
+    try:
+        series_id = int(request.query_params.get("series", "135"))
+    except ValueError:
+        raise HTTPException(400, "Invalid series ID.")
+    cfg = series_config(series_id)
 
     with lock:
         if in_progress_job:
             existing = jobs.get(in_progress_job)
             if existing and existing.get("status") in {"queued", "running"}:
+                if existing.get("series_id", 135) != series_id:
+                    raise HTTPException(409, "Another competition is currently being fetched. Please wait for it to finish, then try again.")
                 return {"job_id": in_progress_job, "reused": True}
 
         job_id = uuid.uuid4().hex
-        jobs[job_id] = {"status": "queued", "progress": 0, "message": "Queued"}
+        jobs[job_id] = {"status": "queued", "progress": 0, "message": "Queued", "series_id": series_id}
         in_progress_job = job_id
 
     force_refresh = request.query_params.get("refresh", "0").lower() in {"1", "true", "yes"}
 
-    if cache_ready() and not force_refresh:
-        copy_cache_to_job(job_id)
+    if cache_ready(series_id) and not force_refresh:
+        copy_cache_to_job(job_id, series_id)
         with lock:
             jobs[job_id] = {
                 "status": "done", "progress": 100,
-                "message": "Loaded cached 2026 data. Use Refresh when you want a new CricClubs fetch."
+                "message": f"Loaded cached 2026 {cfg['label']} data. Use Refresh when you want a new CricClubs fetch."
             }
             in_progress_job = None
         return {"job_id": job_id, "cached": True}
 
-    background_tasks.add_task(run_job, job_id, jobs, lock)
+    background_tasks.add_task(run_job, job_id, jobs, lock, series_id, cfg["format"])
     return {"job_id": job_id, "cached": False}
 
 
@@ -132,8 +157,10 @@ def job_result(job_id: str):
 
 @app.get("/api/jobs/{job_id}/excel")
 def job_excel(job_id: str):
-    p = DATA / job_id / "FRCC-Spartans-2026-T20.xlsx"
-    if not p.exists():
+    outdir = DATA / job_id
+    candidates = list(outdir.glob("FRCC-Spartans-2026-*.xlsx"))
+    if not candidates:
         raise HTTPException(404, "Excel file not ready")
+    p = candidates[0]
     return FileResponse(p, filename=p.name,
                         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")

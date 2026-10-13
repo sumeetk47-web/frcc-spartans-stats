@@ -1,4 +1,4 @@
-# FRCC-Spartans 2026 T20 CricClubs Stats
+# FRCC-Spartans 2026 T20 + P40 CricClubs Stats
 
 A local web app that retrieves CricClubs data through its core API and builds
 ground-wise, player-by-player statistics for FRCC-Spartans.
@@ -6,10 +6,11 @@ ground-wise, player-by-player statistics for FRCC-Spartans.
 ## Defaults
 
 - CricClubs clubId: `5135`
-- Series/league ID: `135`
+- T20 series/league ID: `135`
+- Premier Series (P40) league ID: `137`
 - Team ID: `1202`
 - Season: `2026`
-- Format: Twenty20
+- Formats: Twenty20 and P40 (40 overs)
 
 ## Run
 
@@ -28,7 +29,7 @@ Open http://127.0.0.1:8000
 
 ## What it does
 
-1. Calls CricClubs' schedule API for series 135.
+1. Lets you select 2026 T20 (series 135) or 2026 Premier Series P40 (series 137), then calls CricClubs' schedule API for that series.
 2. Finds FRCC-Spartans fixtures in 2026.
 3. Gets each match's scorecard summary and full ball-by-ball feed.
 4. Reconstructs batting and bowling figures from the delivery data.
@@ -58,3 +59,7 @@ The dashboard now supports phase-specific batting and bowling views for:
 - 17–20 Overs
 
 Phase figures are derived from CricClubs ball-by-ball/over data because the scorecard summary does not expose phase splits. The existing All Overs figures continue to use official scorecard values where available, with ball-by-ball as fallback.
+
+
+### P40 over phases
+For 2026 Premier Series (P40), the phase selector changes to 1–8, 9–32, and 33–40 overs. T20 retains its 1–6, 7–16, and 17–20 phases. The Better/Bad Batting and Bowling Matchups and player dashboard work for whichever series is selected.

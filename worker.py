@@ -16,6 +16,7 @@ APP_VERSION = "4.0.536"
 
 CLUB_ID = int(os.getenv("CRICCLUBS_CLUB_ID", "5135"))
 SERIES_ID = int(os.getenv("CRICCLUBS_SERIES_ID", "135"))
+FORMAT_NAME = os.getenv("CRICCLUBS_FORMAT", "Twenty20")
 TEAM_ID = int(os.getenv("CRICCLUBS_TEAM_ID", "1202"))
 TEAM_NAME = os.getenv("CRICCLUBS_TEAM_NAME", "FRCC-Spartans")
 SEASON = int(os.getenv("CRICCLUBS_SEASON", "2026"))
@@ -134,7 +135,7 @@ def team_in_text(obj):
     target = norm(TEAM_NAME)
     return target in norm(json.dumps(obj, ensure_ascii=False))
 
-def get_schedule():
+def get_schedule(series_id=None):
     """Fetch the complete series schedule, not just the FRCC-Spartans fixtures.
 
     The UI supports filtering by any team, so restricting the schedule here to
@@ -149,7 +150,7 @@ def get_schedule():
     for page_no in range(max_pages):
         offset = page_no * page_size
         payload = api_get(
-            f"/match/getSchedule?v={APP_VERSION}&clubId={CLUB_ID}&seriesId={SERIES_ID}"
+            f"/match/getSchedule?v={APP_VERSION}&clubId={CLUB_ID}&seriesId={series_id or SERIES_ID}"
             f"&limit={page_size}&offset={offset}"
         )
         pages.append(payload)
@@ -165,7 +166,7 @@ def get_schedule():
         time.sleep(REQUEST_DELAY)
     return merged
 
-def extract_matches(schedule):
+def extract_matches(schedule, season=None):
     """Extract fixture/match records without confusing nested IDs.
 
     CricClubs has returned schedule payloads with slightly different nesting
@@ -193,7 +194,7 @@ def extract_matches(schedule):
         if date is None:
             date = first_value(d, ["matchDate", "date", "startDate", "scheduledDate", "matchStartDate", "fixtureDate"])
         years = re.findall(r"20\d{2}", str(date or ""))
-        if years and SEASON not in {int(y) for y in years}:
+        if years and (season or SEASON) not in {int(y) for y in years}:
             continue
         candidates.append(d)
 
@@ -328,7 +329,15 @@ def match_batter_name(official_name, candidates):
     return None
 
 def over_phase(over_no):
-    """Return the requested T20 scoring phase for a 1-based over number."""
+    """Return a format-aware scoring phase for a 1-based over number."""
+    if FORMAT_NAME == "P40":
+        if 1 <= over_no <= 8:
+            return "1-8"
+        if 9 <= over_no <= 32:
+            return "9-32"
+        if 33 <= over_no <= 40:
+            return "33-40"
+        return None
     if 1 <= over_no <= 6:
         return "1-6"
     if 7 <= over_no <= 16:
@@ -612,7 +621,15 @@ def parse_ballfeed(data):
 def is_spartans(name):
     return norm(TEAM_NAME) in norm(name) or norm(name) in norm(TEAM_NAME)
 
-def run_job(job_id, jobs, lock):
+def run_job(job_id, jobs, lock, series_id=None, format_name=None):
+    global SERIES_ID, FORMAT_NAME
+    old_series_id, old_format_name = SERIES_ID, FORMAT_NAME
+    if series_id is not None:
+        SERIES_ID = int(series_id)
+    if format_name:
+        FORMAT_NAME = str(format_name)
+    season = SEASON
+    series_label = "P40 Premier Series" if FORMAT_NAME == "P40" else "T20"
     outdir = Path("data") / job_id
     outdir.mkdir(parents=True, exist_ok=True)
     def update(status=None, progress=None, message=None):
@@ -622,13 +639,13 @@ def run_job(job_id, jobs, lock):
             if progress is not None: j["progress"] = progress
             if message: j["message"] = message
     try:
-        update("running", 3, "Fetching 2026 schedule…")
-        schedule = get_schedule()
+        update("running", 3, f"Fetching 2026 {series_label} schedule…")
+        schedule = get_schedule(SERIES_ID)
         (outdir/"raw_schedule.json").write_text(json.dumps(schedule, indent=2, ensure_ascii=False), encoding="utf-8")
-        fixtures = extract_matches(schedule)
+        fixtures = extract_matches(schedule, season)
         if not fixtures:
             raise RuntimeError(
-                f"No {SEASON} fixtures were found in the CricClubs series schedule response. "
+                f"No {season} fixtures were found in the CricClubs series schedule response. "
                 "The raw API response was saved to data/<job_id>/raw_schedule.json."
             )
 
@@ -841,7 +858,8 @@ def run_job(job_id, jobs, lock):
         # Phase tables (1-6, 7-16, 17-20) are derived from ball-by-ball/over
         # data. "All Overs" continues to use the official-scorecard-reconciled
         # tables above.
-        phase_order = ["1-6", "7-16", "17-20"]
+        phase_order = (["1-8", "9-32", "33-40"] if FORMAT_NAME == "P40"
+                       else ["1-6", "7-16", "17-20"])
         pbat = pd.DataFrame(phase_batting_rows)
         if pbat.empty:
             phase_bat_ground = pd.DataFrame(columns=["team","ground","phase","player","matches","innings","runs","balls","zeros","ones","twos","threes","fours","sixes","strike_rate","average","highest_score"])
@@ -899,7 +917,7 @@ def run_job(job_id, jobs, lock):
         player_bowling_match = bowl[["match_id","date","ground","team","opponent","player","balls","overs","maidens","runs_conceded","wickets","economy"]].copy() if not bowl.empty else pd.DataFrame()
         result = {
             "config":{"club_id":CLUB_ID,"series_id":SERIES_ID,"team_id":TEAM_ID,
-                      "team":TEAM_NAME,"season":SEASON,"format":"Twenty20"},
+                      "team":TEAM_NAME,"season":season,"format":FORMAT_NAME},
             "matches":mat.fillna("").to_dict("records"),
             "ground_summary":ground_summary.fillna("").to_dict("records"),
             "matchups":matchup_df.fillna("").to_dict("records"),
@@ -920,7 +938,7 @@ def run_job(job_id, jobs, lock):
         (outdir/"result.json").write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
 
         # Excel
-        xlsx = outdir / "FRCC-Spartans-2026-T20.xlsx"
+        xlsx = outdir / f"FRCC-Spartans-2026-{series_label.replace(' ', '-')}.xlsx"
         with pd.ExcelWriter(xlsx, engine="openpyxl") as w:
             mat.to_excel(w, "Matches", index=False)
             ground_summary.to_excel(w, "Ground Summary", index=False)
@@ -940,12 +958,12 @@ def run_job(job_id, jobs, lock):
         # Publish the latest successful result as the shared server-side cache.
         cache_dir = Path("data") / "cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        (cache_dir / "result.json").write_text(
+        (cache_dir / f"result_{SERIES_ID}.json").write_text(
             (outdir / "result.json").read_text(encoding="utf-8"), encoding="utf-8"
         )
         import shutil
-        shutil.copy2(xlsx, cache_dir / "FRCC-Spartans-2026-T20.xlsx")
-        update("done", 100, f"Complete — {len(matches)} matches processed.")
+        shutil.copy2(xlsx, cache_dir / xlsx.name)
+        update("done", 100, f"Complete — {len(matches)} matches processed for 2026 {series_label}.")
     except Exception as e:
         (outdir/"error.txt").write_text(str(e), encoding="utf-8")
         update("error", 100, str(e))
@@ -958,3 +976,4 @@ def run_job(job_id, jobs, lock):
                     app.in_progress_job = None
         except Exception:
             pass
+        SERIES_ID, FORMAT_NAME = old_series_id, old_format_name
